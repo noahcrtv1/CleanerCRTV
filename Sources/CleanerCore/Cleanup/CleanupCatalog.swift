@@ -36,6 +36,8 @@ public enum CleanupCatalog {
         "com.apple.trustd",               // cadeia de confiança de certificados
         "com.apple.screentimeagent", "com.apple.familycontrols",   // Tempo de Uso / controles parentais
         "com.apple.mediaanalysisd",       // análise de fotos e vídeos: caro de refazer
+        "com.apple.appstoreagent",        // atualizações da App Store em andamento
+        "com.apple.passwords",            // app Senhas
         "com.lipenoe.cleanercrtv",        // o próprio app
     ]
 
@@ -49,6 +51,15 @@ public enum CleanupCatalog {
         "com.apple.launchservices",
         "com.apple.tcc",
         "com.apple.photo",       // biblioteca e análise do Fotos
+        "com.apple.ams",         // contas da App Store e do Apple Music (amsaccountsd, amsengagementd…)
+        "com.apple.fileprovider", // estado de sincronização de iCloud Drive, OneDrive, Dropbox…
+        "com.google.drivefs",    // Google Drive: arquivos ainda não enviados
+    ]
+
+    /// Caminhos (relativos à pasta pessoal) que nunca viram item, nem dentro de uma pasta maior:
+    /// a pasta que os contém é dividida em filhos, como acontece com as pastas ignoradas.
+    public static let protectedPaths: [String] = [
+        "Library/Caches/Google/DriveFS",   // Google Drive: envios pendentes
     ]
 
     /// Contêineres da Apple liberados. Os demais são de serviços e extensões do sistema: guardam estado de
@@ -90,7 +101,7 @@ public enum CleanupCatalog {
             CleanupRule("Library/Containers/*/Data/Library/Caches", .children, needsFullDiskAccess: true,
                         owner: .wildcard, label: .app,
                         filter: CleanupFilter(excludedNames: protectedCacheNames, excludedPrefixes: protectedCachePrefixes,
-                                              wildcardAccepts: acceptsContainer),
+                                              wildcardAccepts: { CleanupCatalog.acceptsContainer($0) }),
                         splitsAroundClaims: true),
         ]
     )
@@ -107,14 +118,15 @@ public enum CleanupCatalog {
         // Família Chromium: o que está em ~/Library/Caches é só cache; em Application Support, apenas as
         // subpastas de cache de cada perfil. Cookies, histórico, senhas, favoritos, extensões, Local Storage
         // e IndexedDB nunca entram.
-        let chromium: [(name: String, bundle: String, caches: [String], support: String)] = [
-            ("Chrome", "com.google.Chrome", ["Google/Chrome"], "Google/Chrome"),
-            ("Edge", "com.microsoft.edgemac", ["Microsoft Edge"], "Microsoft Edge"),
-            ("Brave", "com.brave.Browser", ["BraveSoftware/Brave-Browser"], "BraveSoftware/Brave-Browser"),
-            ("Arc", "company.thebrowser.Browser", ["Arc", "company.thebrowser.Browser"], "Arc/User Data"),
-            ("Vivaldi", "com.vivaldi.Vivaldi", ["Vivaldi"], "Vivaldi"),
-            ("Opera", "com.operasoftware.Opera", ["com.operasoftware.Opera"], "com.operasoftware.Opera"),
-            ("Chromium", "org.chromium.Chromium", ["Chromium"], "Chromium"),
+        // `rootProfile`: o Opera guarda o perfil principal direto na pasta de dados (sem "Default").
+        let chromium: [(name: String, bundle: String, caches: [String], support: String, rootProfile: Bool)] = [
+            ("Chrome", "com.google.Chrome", ["Google/Chrome"], "Google/Chrome", false),
+            ("Edge", "com.microsoft.edgemac", ["Microsoft Edge"], "Microsoft Edge", false),
+            ("Brave", "com.brave.Browser", ["BraveSoftware/Brave-Browser"], "BraveSoftware/Brave-Browser", false),
+            ("Arc", "company.thebrowser.Browser", ["Arc", "company.thebrowser.Browser"], "Arc/User Data", false),
+            ("Vivaldi", "com.vivaldi.Vivaldi", ["Vivaldi"], "Vivaldi", false),
+            ("Opera", "com.operasoftware.Opera", ["com.operasoftware.Opera"], "com.operasoftware.Opera", true),
+            ("Chromium", "org.chromium.Chromium", ["Chromium"], "Chromium", false),
         ]
         let profileCaches = ["Cache", "Code Cache", "GPUCache", "DawnGraphiteCache", "DawnWebGPUCache",
                              "Service Worker/CacheStorage", "Service Worker/ScriptCache"]
@@ -129,7 +141,7 @@ public enum CleanupCatalog {
                 rules.append(CleanupRule("Library/Application Support/\(browser.support)/*/\(sub)", .itself,
                                          owner: owner, label: .browser(browser.name)))
             }
-            for sub in sharedCaches {
+            for sub in sharedCaches + (browser.rootProfile ? profileCaches : []) {
                 rules.append(CleanupRule("Library/Application Support/\(browser.support)/\(sub)", .itself,
                                          owner: owner, label: .browser(browser.name)))
             }

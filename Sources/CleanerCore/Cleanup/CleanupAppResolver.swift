@@ -19,8 +19,19 @@ public final class CleanupAppResolver: @unchecked Sendable {
         self.lookup = lookup
     }
 
+    /// Ajudantes e atualizadores sem app próprio (`com.empresa.app.ShipIt`) caem no app principal.
     public func app(for bundleID: String) -> App? {
         guard Self.looksLikeBundleID(bundleID) else { return nil }
+        if let app = resolve(bundleID) { return app }
+        var parts = bundleID.split(separator: ".")
+        while parts.count > 3 {
+            parts.removeLast()
+            if let app = resolve(parts.joined(separator: ".")) { return app }
+        }
+        return nil
+    }
+
+    private func resolve(_ bundleID: String) -> App? {
         let key = bundleID.lowercased()
         lock.lock()
         if let cached = cache[key] { lock.unlock(); return cached }

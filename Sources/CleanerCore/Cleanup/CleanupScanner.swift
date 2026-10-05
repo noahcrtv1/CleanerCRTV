@@ -9,6 +9,8 @@ public struct CleanupScanner: Sendable {
         public var home: URL
         /// Apps abertos agora: os itens deles entram desmarcados.
         public var runningBundleIDs: Set<String>
+        /// Nomes dos apps abertos, para caches com nome de app em vez de bundle ID (ex.: `Caches/Firefox`).
+        public var runningAppNames: Set<String>
         public var hasFullDiskAccess: Bool
         public var now: Date
         public var categories: Set<CleanupCategoryID>
@@ -22,6 +24,7 @@ public struct CleanupScanner: Sendable {
 
         public init(home: URL = Paths.home,
                     runningBundleIDs: Set<String> = [],
+                    runningAppNames: Set<String> = [],
                     hasFullDiskAccess: Bool = true,
                     now: Date = Date(),
                     categories: Set<CleanupCategoryID> = Set(CleanupCategoryID.allCases),
@@ -31,6 +34,7 @@ public struct CleanupScanner: Sendable {
                     maxConcurrentSizing: Int = 8) {
             self.home = home
             self.runningBundleIDs = runningBundleIDs
+            self.runningAppNames = runningAppNames
             self.hasFullDiskAccess = hasFullDiskAccess
             self.now = now
             self.categories = categories
@@ -63,7 +67,9 @@ public struct CleanupScanner: Sendable {
     private func run(_ options: Options, flag: CleanupCancelFlag, gate: CleanupProgressGate,
                      progress: @escaping @Sendable (CleanupScanProgress) -> Void) async -> CleanupScanResult {
         let catalog = self.catalog
-        let excluded = (options.excludedPaths ?? Exclusions.paths).map { URL(fileURLWithPath: $0).standardizedFileURL.path }
+        let protected = CleanupCatalog.protectedPaths.map { options.home.appendingPathComponent($0).path }
+        let excluded = ((options.excludedPaths ?? Exclusions.paths) + protected)
+            .map { URL(fileURLWithPath: $0).standardizedFileURL.path }
 
         // Fase 1: descoberta (rápida, só lista pastas).
         let (candidates, inaccessible) = await Self.offload { () -> ([CleanupCandidate], [String]) in
@@ -79,7 +85,7 @@ public struct CleanupScanner: Sendable {
         if flag.isCancelled { return CleanupScanResult(inaccessiblePaths: inaccessible, wasCancelled: true) }
 
         // Fase 2: tamanho de cada item, até `maxConcurrentSizing` de cada vez.
-        let running = Set(options.runningBundleIDs.map { $0.lowercased() })
+        let running = CleanupRunningSet(bundleIDs: options.runningBundleIDs, names: options.runningAppNames)
         var entries: [CleanupEntry] = []
         var measured = 0
         var bytes: Int64 = 0
@@ -112,13 +118,17 @@ public struct CleanupScanner: Sendable {
 
     // MARK: - Item
 
-    static func makeEntry(_ candidate: CleanupCandidate, options: Options, running: Set<String>,
+    static func makeEntry(_ candidate: CleanupCandidate, options: Options, running: CleanupRunningSet,
                           flag: CleanupCancelFlag) -> CleanupEntry? {
         let size = FileSizer.allocatedSize(of: candidate.url, isCancelled: { flag.isCancelled })
         guard size > 0, !flag.isCancelled else { return nil }
 
         let owners = ownerBundleIDs(candidate)
-        let isRunning = isRunning(owners: owners, running: running)
+        var isRunning = isRunning(owners: owners, running: running.bundleIDs)
+        if !isRunning, owners.isEmpty, case .itemName = candidate.rule.owner,
+           let top = candidate.relativeComponents.first {
+            isRunning = running.names.contains(top.lowercased())
+        }
         var bundleID = owners.first { !$0.hasSuffix(".*") }
         if bundleID == nil, case .app = candidate.rule.label, let top = candidate.relativeComponents.first,
            CleanupAppResolver.looksLikeBundleID(top) {
@@ -176,6 +186,17 @@ public struct CleanupScanner: Sendable {
         await withCheckedContinuation { continuation in
             ioQueue.async { continuation.resume(returning: work()) }
         }
+    }
+}
+
+/// Apps abertos, normalizados em minúsculas.
+struct CleanupRunningSet: Sendable {
+    let bundleIDs: Set<String>
+    let names: Set<String>
+
+    init(bundleIDs: Set<String>, names: Set<String>) {
+        self.bundleIDs = Set(bundleIDs.map { $0.lowercased() })
+        self.names = Set(names.map { $0.lowercased() })
     }
 }
 

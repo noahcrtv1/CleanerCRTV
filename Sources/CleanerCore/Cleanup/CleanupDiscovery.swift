@@ -153,10 +153,16 @@ final class CleanupDiscovery {
                 guard let children = list(baseURL) else { continue }
                 var fromBase: [CleanupCandidate] = []
                 for child in children {
-                    if let candidate = makeCandidate(child, rule: rule, categoryID: category.id,
-                                                     recommended: category.isRecommended, base: basePath, captures: captures) {
-                        fromBase.append(candidate)
+                    if cancel.isCancelled { break }
+                    guard let candidate = makeCandidate(child, rule: rule, categoryID: category.id,
+                                                        recommended: category.isRecommended, base: basePath, captures: captures)
+                    else { continue }
+                    // Pasta protegida pelo macOS (sem Acesso Total ao Disco): não dá para medir nem limpar.
+                    if candidate.isDirectory, !Self.isReadableDirectory(candidate.path) {
+                        inaccessible.insert(candidate.path)
+                        continue
                     }
+                    fromBase.append(candidate)
                 }
                 if rule.filter.keepNewestVersion { fromBase = Self.olderVersions(fromBase) }
                 found.append(contentsOf: fromBase)
