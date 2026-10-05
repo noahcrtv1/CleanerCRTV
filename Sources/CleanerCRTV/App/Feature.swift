@@ -93,12 +93,26 @@ enum FeatureSection: String, CaseIterable, Identifiable {
     var features: [Feature] { Feature.allCases.filter { $0.section == self } }
 }
 
+/// Resultado resumido de um módulo para o Painel.
+struct ScanSummary: Equatable {
+    /// Ex.: "Lixo encontrado", "Apps sem uso há 3 meses".
+    var title: String
+    /// Bytes recuperáveis (0 quando não se aplica).
+    var bytes: Int64
+    /// Quantidade de itens (arquivos, grupos, apps, agentes…).
+    var count: Int
+    /// Linha extra opcional (ex.: "12 apps · 3 restos de apps removidos").
+    var detail: String?
+}
+
 /// Contrato comum dos módulos que varrem o disco (o Painel dispara e lê todos por aqui).
 @MainActor
 protocol ScanningFeature: AnyObject {
     var isScanning: Bool { get }
     /// Texto curto ao lado do item na barra lateral (ex.: "3,2 GB"). nil = sem selo.
     var badge: String? { get }
+    /// nil até a primeira varredura terminar.
+    var summary: ScanSummary? { get }
     func scan() async
     func cancel()
 }

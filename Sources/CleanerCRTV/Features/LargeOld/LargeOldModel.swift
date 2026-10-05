@@ -7,6 +7,7 @@ import SwiftUI
 final class LargeOldModel: ScanningFeature {
     var isScanning = false
     var badge: String? { nil }
+    var summary: ScanSummary? { nil }
 
     func scan() async {}
     func cancel() {}
