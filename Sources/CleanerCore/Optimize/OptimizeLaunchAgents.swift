@@ -139,6 +139,15 @@ public struct OptimizeLaunchAgent: Sendable, Hashable, Identifiable {
         return URL(fileURLWithPath: program)
     }
 
+    /// Busca por nome, rótulo, programa ou arquivo (sem diferenciar maiúsculas e acentos).
+    public func matches(_ query: String) -> Bool {
+        let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return true }
+        return [displayName, label, program ?? "", url.lastPathComponent].contains {
+            $0.range(of: query, options: [.caseInsensitive, .diacriticInsensitive]) != nil
+        }
+    }
+
     /// Quando roda, em português (ex.: "Ao iniciar sessão · Sempre ativo").
     public var scheduleDescription: String {
         var parts: [String] = []

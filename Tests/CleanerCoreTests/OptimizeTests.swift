@@ -210,6 +210,15 @@ struct OptimizeLaunchctlParserTests {
         #expect(await OptimizeLaunchctl.enable(agent) == .refused)
     }
 
+    @Test func reloadRefusesWhatItCannotManage() async {
+        let daemon = OptimizeLaunchAgent(url: URL(fileURLWithPath: "/Library/LaunchDaemons/com.x.plist"),
+                                         scope: .systemDaemon, label: "com.x", program: "/bin/sh")
+        #expect(await OptimizeLaunchctl.reload(daemon) == .refused)
+        let invalid = OptimizeLaunchAgent(url: fakeURL, scope: .user, label: "com.exemplo.agente", problem: .invalidPlist)
+        #expect(await OptimizeLaunchctl.reload(invalid) == .refused)
+        #expect(await OptimizeLaunchctl.bootout(label: "a/b") == .refused)
+    }
+
     @Test func notLoadedStatusesAreBenign() {
         #expect(OptimizeLaunchctl.isNotLoadedStatus(OptimizeProcessResult(status: 113)))
         #expect(OptimizeLaunchctl.isNotLoadedStatus(OptimizeProcessResult(status: 3)))
@@ -296,6 +305,20 @@ struct OptimizeInventoryTests {
         #expect(agents[2].owner?.url.path == "/Applications/Spotify.app")
         #expect(agents[3].owner == nil)
         #expect(agents[3].displayName == "com.desconhecido.coisa")
+    }
+
+    @Test func searchMatchesNameLabelAndProgram() {
+        var agent = OptimizeLaunchAgent(url: fakeURL, scope: .user, label: "com.spotify.client.startuphelper",
+                                        program: "/Applications/Spotify.app/Contents/Library/Helper")
+        agent.owner = OptimizeOwnerApp(name: "Música Spotify", url: URL(fileURLWithPath: "/Applications/Spotify.app"))
+        #expect(agent.matches(""))
+        #expect(agent.matches("  "))
+        #expect(agent.matches("SPOTIFY"))
+        #expect(agent.matches("musica"), "ignora acentos")
+        #expect(agent.matches("startuphelper"))
+        #expect(agent.matches("Contents/Library"))
+        #expect(agent.matches("com.exemplo.agente.plist"))
+        #expect(!agent.matches("dropbox"))
     }
 
     @Test func helpers() {

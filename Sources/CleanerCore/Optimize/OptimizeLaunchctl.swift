@@ -119,7 +119,8 @@ public enum OptimizeLaunchctl {
     public static func disable(_ agent: OptimizeLaunchAgent) async -> OptimizeActionResult {
         guard let label = manageableLabel(agent) else { return .refused }
         let commands = disableCommands(label: label)
-        let bootout = await OptimizeProcess.run(executable, commands[0], timeout: 20)
+        // bootout espera o processo sair (ExitTimeOut padrão do launchd: 20 s).
+        let bootout = await OptimizeProcess.run(executable, commands[0], timeout: 30)
         guard bootout.succeeded || isNotLoadedStatus(bootout) else { return .failed(bootout.errorLine) }
         let disable = await OptimizeProcess.run(executable, commands[1])
         return disable.succeeded ? .ok : .failed(disable.errorLine)
@@ -142,7 +143,7 @@ public enum OptimizeLaunchctl {
     @discardableResult
     public static func bootout(label: String) async -> OptimizeActionResult {
         guard isValidLabel(label) else { return .refused }
-        let result = await OptimizeProcess.run(executable, ["bootout", serviceTarget(label)], timeout: 20)
+        let result = await OptimizeProcess.run(executable, ["bootout", serviceTarget(label)], timeout: 30)
         return result.succeeded || isNotLoadedStatus(result) ? .ok : .failed(result.errorLine)
     }
 
@@ -164,6 +165,16 @@ public enum OptimizeLaunchctl {
             return .ok
         }
         return await bootout(label: label)
+    }
+
+    /// Volta a carregar um agente descarregado (ex.: a remoção foi cancelada na confirmação).
+    /// Não mexe na marca de ativado/desativado.
+    @discardableResult
+    public static func reload(_ agent: OptimizeLaunchAgent) async -> OptimizeActionResult {
+        guard let label = manageableLabel(agent) else { return .refused }
+        if await isLoaded(label: label) { return .ok }
+        let result = await OptimizeProcess.run(executable, ["bootstrap", guiDomain(), agent.url.path])
+        return result.succeeded ? .ok : .failed(result.errorLine)
     }
 
     public static func isLoaded(label: String) async -> Bool {

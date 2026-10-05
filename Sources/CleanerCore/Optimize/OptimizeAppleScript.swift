@@ -25,11 +25,13 @@ public struct OptimizeScriptError: Error, Sendable, Equatable {
 }
 
 /// Executa AppleScript no próprio processo (os pedidos de senha e de permissão aparecem em nome do
-/// CleanerCRTV), numa fila serial própria: nunca na main e nunca dois ao mesmo tempo.
+/// CleanerCRTV), fora da main. Cada fila é serial; a de administrador é separada para que uma
+/// verificação de disco demorada não segure a leitura dos itens de início.
 enum OptimizeAppleScript {
-    private static let queue = DispatchQueue(label: "CleanerCRTV.optimize.applescript", qos: .userInitiated)
+    static let eventsQueue = DispatchQueue(label: "CleanerCRTV.optimize.applescript", qos: .userInitiated)
+    static let adminQueue = DispatchQueue(label: "CleanerCRTV.optimize.applescript.admin", qos: .userInitiated)
 
-    static func run<T: Sendable>(_ source: String,
+    static func run<T: Sendable>(_ source: String, on queue: DispatchQueue = eventsQueue,
                                  transform: @escaping @Sendable (NSAppleEventDescriptor) -> T) async -> Result<T, OptimizeScriptError> {
         await withCheckedContinuation { continuation in
             queue.async {
@@ -52,7 +54,7 @@ enum OptimizeAppleScript {
     static func call<T: Sendable>(_ source: String, handler: String, arguments: [String],
                                   transform: @escaping @Sendable (NSAppleEventDescriptor) -> T) async -> Result<T, OptimizeScriptError> {
         await withCheckedContinuation { continuation in
-            queue.async {
+            eventsQueue.async {
                 var info: NSDictionary?
                 guard let script = NSAppleScript(source: source), script.compileAndReturnError(&info) else {
                     let error = info.map(OptimizeScriptError.init(info:)) ?? OptimizeScriptError(code: -1, message: "Script inválido")
@@ -74,7 +76,7 @@ enum OptimizeAppleScript {
     /// fixos do catálogo de manutenção.
     static func runAdminShell(_ command: String) async -> Result<String, OptimizeScriptError> {
         let source = "do shell script \(literal(command)) with administrator privileges without altering line endings"
-        return await run(source) { $0.stringValue ?? "" }
+        return await run(source, on: adminQueue) { $0.stringValue ?? "" }
     }
 
     /// Texto como literal de AppleScript (aspas e barras escapadas).
