@@ -154,6 +154,7 @@ private struct OptimizeTaskCard: View {
                 Text("Última vez \(last, format: .relative(presentation: .named))")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
+                    .lineLimit(1)
                     .help(last.formatted(date: .long, time: .shortened))
             } else {
                 Text("Nunca executada").font(.caption).foregroundStyle(.tertiary)

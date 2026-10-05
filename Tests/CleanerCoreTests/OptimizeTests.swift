@@ -185,6 +185,27 @@ struct OptimizeLaunchctlParserTests {
         #expect(OptimizeLaunchctlParser.parseServicePath("type = LaunchAgent") == nil)
     }
 
+    @Test func stopsOnlyTheServiceLoadedFromThisPlist() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("optimize-same-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let plist = dir.appendingPathComponent("com.exemplo.a.plist")
+        try Data("x".utf8).write(to: plist)
+        let link = dir.appendingPathComponent("link.plist")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: plist)
+
+        #expect(OptimizeLaunchctl.isSamePlist(loadedFrom: nil, plist: plist), "sem linha path: bootout como antes")
+        #expect(OptimizeLaunchctl.isSamePlist(loadedFrom: plist.path, plist: plist))
+        #expect(OptimizeLaunchctl.isSamePlist(loadedFrom: link.path, plist: plist), "link e destino são o mesmo arquivo")
+        #expect(!OptimizeLaunchctl.isSamePlist(loadedFrom: "/Library/LaunchAgents/com.exemplo.a.plist", plist: plist),
+                "mesmo rótulo em /Library não cai junto")
+    }
+
+    @Test func stopRefusesInvalidLabelWithoutRunningAnything() async {
+        #expect(await OptimizeLaunchctl.stopIfLoaded(from: fakeURL, label: "a/b") == false)
+        #expect(await OptimizeLaunchctl.stopIfLoaded(from: fakeURL, label: "") == false)
+    }
+
     @Test func commandsUseServiceTargets() {
         let disable = OptimizeLaunchctl.disableCommands(label: "com.exemplo.a", uid: 501)
         #expect(disable == [["bootout", "gui/501/com.exemplo.a"], ["disable", "gui/501/com.exemplo.a"]])

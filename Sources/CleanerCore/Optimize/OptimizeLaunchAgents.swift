@@ -178,7 +178,7 @@ public struct OptimizeLaunchAgent: Sendable, Hashable, Identifiable {
     static func describeCalendar(_ intervals: [OptimizeCalendarInterval]) -> String? {
         guard let first = intervals.first else { return nil }
         guard intervals.count == 1 else { return "Em \(intervals.count) horários programados" }
-        let time: String? = first.hour.map { String(format: " às %02d:%02d", $0, first.minute ?? 0) }
+        let time: String? = first.hour.map { String(format: " às %02ld:%02ld", $0, first.minute ?? 0) }
         if let weekday = first.weekday {
             let names = ["domingo", "segunda", "terça", "quarta", "quinta", "sexta", "sábado"]
             let name = names[((weekday % 7) + 7) % 7]
@@ -187,7 +187,7 @@ public struct OptimizeLaunchAgent: Sendable, Hashable, Identifiable {
         }
         if let day = first.day { return "Todo dia \(day) do mês\(time ?? "")" }
         if let time { return "Todo dia\(time)" }
-        if let minute = first.minute { return String(format: "A cada hora, no minuto %02d", minute) }
+        if let minute = first.minute { return String(format: "A cada hora, no minuto %02ld", minute) }
         return "A cada minuto"
     }
 }

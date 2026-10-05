@@ -69,6 +69,7 @@ final class OptimizeModel: ScanningFeature {
     @ObservationIgnored private var taskHandles: [String: Task<Void, Never>] = [:]
     /// Agentes descarregados à espera da confirmação de remoção (nil = nenhuma remoção pendente).
     @ObservationIgnored private var pendingRemoval: [OptimizeLaunchAgent]?
+    @ObservationIgnored private var isPreparingRemoval = false
     @ObservationIgnored private let log = OptimizeMaintenanceLog()
 
     init() {
@@ -101,9 +102,15 @@ final class OptimizeModel: ScanningFeature {
     // MARK: - Agentes
 
     private func loadAgents(showProgress: Bool) async {
-        if let scanTask {
-            _ = await scanTask.value
-            return
+        // Uma leitura por vez. A varredura visível só aproveita a que já está em curso; a releitura
+        // silenciosa (depois de ativar, desativar ou remover) espera e lê de novo, porque a que estava
+        // em curso pode ter começado antes da mudança e trazer o estado antigo.
+        if scanTask != nil {
+            while let running = scanTask {
+                _ = await running.value
+                if scanTask == running { scanTask = nil }
+            }
+            if showProgress { return }
         }
         if showProgress {
             isScanning = true
@@ -121,7 +128,7 @@ final class OptimizeModel: ScanningFeature {
         }
         scanTask = task
         let result = await task.value
-        scanTask = nil
+        if scanTask == task { scanTask = nil }
         if showProgress {
             isScanning = false
             scanStatus = nil
@@ -147,12 +154,16 @@ final class OptimizeModel: ScanningFeature {
     /// Se a confirmação for cancelada, `removalSheetClosed()` volta a carregá-los.
     func prepareRemoval(_ targets: [OptimizeLaunchAgent]) async -> (items: [RemovalItem], stopped: Int) {
         let removable = targets.filter { $0.scope == .user && $0.isRemovable }
-        guard !removable.isEmpty, pendingRemoval == nil else { return ([], 0) }
+        // Um pedido por vez: um segundo clique durante o bootout perderia a lista dos parados.
+        guard !removable.isEmpty, pendingRemoval == nil, !isPreparingRemoval else { return ([], 0) }
+        isPreparingRemoval = true
+        defer { isPreparingRemoval = false }
         busyAgents.formUnion(removable.map(\.id))
         let (items, stopped) = await Task.detached(priority: .userInitiated) { () -> ([RemovalItem], [OptimizeLaunchAgent]) in
             var stopped: [OptimizeLaunchAgent] = []
-            for agent in removable where agent.isLoaded {
-                if await OptimizeLaunchctl.bootoutIfLoaded(from: agent.url, label: agent.label).isOK { stopped.append(agent) }
+            // Confere no launchd agora (o estado da varredura pode estar velho); só conta quem parou de fato.
+            for agent in removable where OptimizeLaunchctl.isValidLabel(agent.label) {
+                if await OptimizeLaunchctl.stopIfLoaded(from: agent.url, label: agent.label) { stopped.append(agent) }
             }
             let items = removable.map {
                 RemovalItem(url: $0.url, size: FileSizer.allocatedSize(ofItem: $0.url), label: $0.displayName)
@@ -176,7 +187,7 @@ final class OptimizeModel: ScanningFeature {
         }
     }
 
-    /// A folha de confirmação fechou. Sem conclusão = cancelada: os agentes parados voltam.
+    /// A folha de confirmação fechou (ou nem chegou a abrir). Sem conclusão = cancelada: os agentes parados voltam.
     func removalSheetClosed() async {
         guard let stopped = pendingRemoval else { return }
         pendingRemoval = nil

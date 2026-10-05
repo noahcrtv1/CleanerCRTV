@@ -44,10 +44,6 @@ struct OptimizeView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        // Remoção cancelada na folha: os agentes parados antes da confirmação voltam a carregar.
-        .onChange(of: app.removalRequest == nil) { _, closed in
-            if closed { Task { await model.removalSheetClosed() } }
-        }
     }
 }
 
@@ -208,8 +204,8 @@ private struct OptimizeAgentsPane: View {
     private func brokenSummary(_ model: OptimizeModel) -> String {
         switch model.brokenRemovable.count {
         case 0: "Nenhum agente quebrado"
-        case 1: "1 agente quebrado aponta para um programa que não existe"
-        case let n: "\(n) agentes quebrados apontam para programas que não existem"
+        case 1: "1 agente quebrado: o macOS não consegue mais abri-lo"
+        case let n: "\(n) agentes quebrados: o macOS não consegue mais abri-los"
         }
     }
 
@@ -232,9 +228,15 @@ private struct OptimizeAgentsPane: View {
 
     private func remove(_ targets: [OptimizeLaunchAgent]) {
         let model = app.optimize
+        let app = app
         Task {
             let (items, stopped) = await model.prepareRemoval(targets)
             guard !items.isEmpty else { return }
+            // Outro módulo abriu uma confirmação enquanto os agentes paravam: não passa por cima dela.
+            guard app.removalRequest == nil else {
+                await model.removalSheetClosed()
+                return
+            }
             let title = items.count == 1
                 ? "Remover o agente “\(items[0].label ?? items[0].url.lastPathComponent)”?"
                 : "Remover \(items.count) agentes?"
@@ -248,6 +250,12 @@ private struct OptimizeAgentsPane: View {
                 model.finishRemoval(report)
             }
             selection.subtract(targets.map(\.id))
+            // Espera a folha fechar mesmo que você saia desta tela. Se fechou sem concluir (Cancelar),
+            // os agentes parados voltam a carregar; se concluiu, `finishRemoval` já cuidou deles.
+            if let requestID = app.removalRequest?.id {
+                await OptimizeSheetWatcher.waitUntilClosed(requestID, in: app)
+            }
+            await model.removalSheetClosed()
         }
     }
 }
@@ -399,5 +407,21 @@ struct OptimizeTag: View {
             .padding(.vertical, 2)
             .background(Capsule().fill(color.opacity(0.14)))
             .fixedSize()
+    }
+}
+
+/// Espera a folha de remoção com este pedido sair da tela, sem consultar em laço.
+@MainActor
+private enum OptimizeSheetWatcher {
+    static func waitUntilClosed(_ requestID: UUID, in app: AppModel) async {
+        while app.removalRequest?.id == requestID {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                withObservationTracking {
+                    _ = app.removalRequest?.id
+                } onChange: {
+                    continuation.resume()
+                }
+            }
+        }
     }
 }

@@ -102,9 +102,14 @@ public enum OptimizeLoginItems {
             guard let column = descriptor.atIndex(index), column.numberOfItems > 0 else { return [] }
             return (1...column.numberOfItems).compactMap { column.atIndex($0) }
         }
+        // `missing value` chega como typeType com o código 'msng' (não como descritor 'msng').
         let missing = OptimizeAppleScript.fourCharCode("msng")
+        let typeType = OptimizeAppleScript.fourCharCode("type")
+        func isMissing(_ d: NSAppleEventDescriptor) -> Bool {
+            d.descriptorType == missing || (d.descriptorType == typeType && d.typeCodeValue == missing)
+        }
         let names = list(1).map { $0.stringValue ?? "" }
-        let paths = list(2).map { $0.descriptorType == missing ? nil : $0.stringValue }
+        let paths = list(2).map { isMissing($0) ? nil : $0.stringValue }
         let hidden = list(3).map { $0.booleanValue }
         return (names, paths, hidden)
     }

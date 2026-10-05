@@ -153,18 +153,25 @@ public enum OptimizeLaunchctl {
         result.launchError == nil && !result.timedOut && !result.cancelled && [3, 36, 113].contains(result.status)
     }
 
-    /// Descarrega só se o launchd carregou o serviço a partir deste .plist: um agente de /Library
-    /// pode ter o mesmo rótulo e não deve cair junto.
-    @discardableResult
-    public static func bootoutIfLoaded(from plist: URL, label: String) async -> OptimizeActionResult {
-        guard isValidLabel(label) else { return .refused }
+    /// Para o serviço só se o launchd o carregou a partir deste .plist: um agente de /Library
+    /// pode ter o mesmo rótulo e não deve cair junto. true = estava carregado e parou (é o que
+    /// precisa voltar a carregar se a remoção for cancelada); false = não estava, era de outro
+    /// arquivo ou o bootout falhou.
+    public static func stopIfLoaded(from plist: URL, label: String) async -> Bool {
+        guard isValidLabel(label) else { return false }
         let info = await OptimizeProcess.run(executable, ["print", serviceTarget(label)])
-        guard info.succeeded else { return .ok }
-        if let loadedFrom = OptimizeLaunchctlParser.parseServicePath(info.stdout),
-           URL(fileURLWithPath: loadedFrom).standardizedFileURL.path != plist.standardizedFileURL.path {
-            return .ok
-        }
-        return await bootout(label: label)
+        guard info.succeeded,
+              isSamePlist(loadedFrom: OptimizeLaunchctlParser.parseServicePath(info.stdout), plist: plist)
+        else { return false }
+        let result = await OptimizeProcess.run(executable, ["bootout", serviceTarget(label)], timeout: 30)
+        return result.succeeded
+    }
+
+    /// Sem linha `path` não dá para saber de onde veio: vale como o mesmo arquivo (comportamento do bootout puro).
+    static func isSamePlist(loadedFrom: String?, plist: URL) -> Bool {
+        guard let loadedFrom else { return true }
+        func normalized(_ url: URL) -> String { url.standardizedFileURL.resolvingSymlinksInPath().path }
+        return normalized(URL(fileURLWithPath: loadedFrom)) == normalized(plist)
     }
 
     /// Volta a carregar um agente descarregado (ex.: a remoção foi cancelada na confirmação).
