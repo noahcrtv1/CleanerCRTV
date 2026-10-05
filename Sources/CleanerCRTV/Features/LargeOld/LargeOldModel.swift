@@ -90,11 +90,14 @@ final class LargeOldModel: ScanningFeature {
     /// Linhas destacadas na tabela (Quick Look, menu de contexto). Não é a marcação para remover.
     var tableSelection: Set<URL> = []
 
+    /// Resultados no tamanho e idade escolhidos (sem tipo nem busca): é o número do selo.
+    private(set) var resultCount = 0
+
     private(set) var summary: ScanSummary?
 
     var badge: String? {
-        guard scannedRoot != nil, !visible.isEmpty else { return nil }
-        return visible.count.formatted()
+        guard scannedRoot != nil, resultCount > 0 else { return nil }
+        return resultCount.formatted()
     }
 
     var visibleCheckState: TriStateCheckbox.CheckState {
@@ -105,8 +108,10 @@ final class LargeOldModel: ScanningFeature {
     /// Marcados que os filtros atuais escondem (também vão para a remoção).
     var hiddenCheckedCount: Int { checked.count - visibleCheckedCount }
 
-    @ObservationIgnored private var scanTask: Task<[LargeOldFile], Never>?
+    @ObservationIgnored private var scanTask: Task<LargeOldScanOutcome, Never>?
     @ObservationIgnored private var generation = 0
+    /// Andamento final da varredura que está na tela (volta a valer se a próxima for cancelada).
+    @ObservationIgnored private var resultProgress = LargeOldProgress()
     @ObservationIgnored private var scannedMinSize: Int64 = .max
     @ObservationIgnored private var scanningMinSize: Int64 = .max
     @ObservationIgnored private var sizes: [URL: Int64] = [:]
@@ -126,12 +131,15 @@ final class LargeOldModel: ScanningFeature {
         Task { await performScan() }
     }
 
-    /// Troca a raiz e já varre. Devolve o motivo quando a pasta não serve.
-    func choose(_ newRoot: LargeOldRoot) -> String? {
-        if let problem = LargeOldScanner.rootProblem(newRoot.url) { return problem }
-        root = newRoot
+    /// Troca a raiz e já varre. Se a pasta não servir, o motivo chega em `issue`.
+    func choose(_ newRoot: LargeOldRoot) {
+        // A pasta pessoal escolhida no painel de pastas é a mesma raiz do Painel (e alimenta o resumo).
+        if case .folder(let url) = newRoot, url.standardizedFileURL.path == Paths.home.standardizedFileURL.path {
+            root = .home
+        } else {
+            root = newRoot
+        }
         startScan()
-        return nil
     }
 
     func cancel() {
@@ -144,11 +152,6 @@ final class LargeOldModel: ScanningFeature {
     }
 
     private func performScan() async {
-        if let problem = LargeOldScanner.rootProblem(root.url) {
-            issue = problem
-            if let scannedRoot { root = scannedRoot }
-            return
-        }
         scanTask?.cancel()
         generation += 1
         let gen = generation
@@ -160,42 +163,58 @@ final class LargeOldModel: ScanningFeature {
         progress = LargeOldProgress()
         isScanning = true
 
-        let task = Task.detached(priority: .userInitiated) {
-            await LargeOldScanner.scan(options) { update in
+        let task = Task.detached(priority: .userInitiated) { () -> LargeOldScanOutcome in
+            // Validar a raiz toca o disco (pode ser de rede): fora da main.
+            if let problem = LargeOldScanner.rootProblem(options.root, exclusions: options.exclusions) {
+                return LargeOldScanOutcome(problem: problem)
+            }
+            let last = LargeOldProgressBox()
+            let files = await LargeOldScanner.scan(options) { update in
+                last.keep(update)
                 Task { @MainActor in self.receive(update, generation: gen) }
             }
+            return LargeOldScanOutcome(files: files, progress: last.value)
         }
         scanTask = task
-        let found = await withTaskCancellationHandler { await task.value } onCancel: { task.cancel() }
+        let outcome = await withTaskCancellationHandler { await task.value } onCancel: { task.cancel() }
 
         guard gen == generation else { return }   // outra varredura tomou o lugar
         scanTask = nil
         isScanning = false
-        if task.isCancelled {
-            if let scannedRoot { root = scannedRoot }
-            return
+        if let problem = outcome.problem {
+            issue = problem
+            progress = resultProgress
+            root = scannedRoot ?? .home
+        } else if task.isCancelled {
+            progress = resultProgress
+            root = scannedRoot ?? root
+        } else {
+            apply(outcome.files, progress: outcome.progress, root: scanRoot, minSize: minSize)
         }
-        apply(found, root: scanRoot, minSize: minSize)
     }
 
     private func receive(_ update: LargeOldProgress, generation gen: Int) {
-        // Leitores em paralelo podem entregar fora de ordem.
-        guard gen == generation, update.filesVisited >= progress.filesVisited else { return }
+        // Leitores em paralelo podem entregar fora de ordem; depois do fim vale o número final.
+        guard gen == generation, isScanning, update.filesVisited >= progress.filesVisited else { return }
         progress = update
     }
 
-    private func apply(_ found: [LargeOldFile], root scanRoot: LargeOldRoot, minSize: Int64) {
+    private func apply(_ found: [LargeOldFile], progress final: LargeOldProgress, root scanRoot: LargeOldRoot, minSize: Int64) {
         if scannedRoot != scanRoot {
             checked = []
             tableSelection = []
         }
         scannedRoot = scanRoot
         scannedMinSize = minSize
+        progress = final
+        resultProgress = final
         files = found.sorted(using: sortOrder)
         sizes = Dictionary(found.map { ($0.url, $0.size) }, uniquingKeysWith: { first, _ in first })
         checked = checked.filter { sizes[$0] != nil }
         tableSelection = tableSelection.filter { sizes[$0] != nil }
         refilter()
+        // Tamanhos podem ter mudado e marcados podem ter sumido: soma de novo.
+        recountChecked()
         if scanRoot == .home { summary = Self.makeSummary(files) }
     }
 
@@ -243,7 +262,9 @@ final class LargeOldModel: ScanningFeature {
         var totals: [LargeOldKind: LargeOldKindTotal] = [:]
         var list: [LargeOldFile] = []
         var bytes: Int64 = 0
+        var count = 0
         for file in files where filter.matchesSizeAndAge(file, cutoff: cutoff) {
+            count += 1
             totals[file.kind, default: LargeOldKindTotal()].count += 1
             totals[file.kind, default: LargeOldKindTotal()].bytes += file.size
             guard kinds.isEmpty || kinds.contains(file.kind) else { continue }
@@ -252,6 +273,7 @@ final class LargeOldModel: ScanningFeature {
             bytes += file.size
         }
         kindTotals = totals
+        resultCount = count
         visible = list
         visibleBytes = bytes
         recountVisibleChecked()
@@ -319,4 +341,19 @@ final class LargeOldModel: ScanningFeature {
         refilter()
         if scannedRoot == .home { summary = Self.makeSummary(files) }
     }
+}
+
+private struct LargeOldScanOutcome: Sendable {
+    var problem: String?
+    var files: [LargeOldFile] = []
+    var progress = LargeOldProgress()
+}
+
+/// Último andamento entregue pelos leitores (o relatório final sai antes de a varredura voltar).
+private final class LargeOldProgressBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var last = LargeOldProgress()
+
+    func keep(_ progress: LargeOldProgress) { lock.withLock { last = progress } }
+    var value: LargeOldProgress { lock.withLock { last } }
 }

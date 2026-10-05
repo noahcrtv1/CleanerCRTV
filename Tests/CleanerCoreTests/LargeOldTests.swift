@@ -151,6 +151,21 @@ struct LargeOldRulesTests {
         #expect(rules.isPathAllowed("/Volumes/Externo/Filmes"))
     }
 
+    @Test func foreignMacVolumeKeepsItsSystemOut() {
+        var rules = LargeOldRules(options: LargeOldScanOptions(root: Paths.home, exclusions: []))
+        rules.foreignSystemVolume = "/Volumes/Outro"
+        #expect(!rules.isPathAllowed("/Volumes/Outro/System"))
+        #expect(!rules.isPathAllowed("/Volumes/Outro/Library/Caches"))
+        #expect(!rules.isPathAllowed("/Volumes/Outro/private/var/vm"))
+        #expect(!rules.isPathAllowed("/Volumes/Outro/Users/ana/Library"))
+        #expect(!rules.isPathAllowed("/Volumes/Outro/Users/ana/Library/Mail"))
+        #expect(rules.isPathAllowed("/Volumes/Outro"))
+        #expect(rules.isPathAllowed("/Volumes/Outro/Users/ana/Movies"))
+        #expect(rules.isPathAllowed("/Volumes/Outro/Projetos/Library"))
+        #expect(rules.isPathAllowed("/Volumes/Outro2/Library"), "outro disco não herda a regra")
+        #expect(LargeOldRules.systemVolumeRoot(containing: Paths.home.path) == nil)
+    }
+
     @Test func datalessPolicyIsRestored() {
         let before = getiopolicy_np(IOPOL_TYPE_VFS_MATERIALIZE_DATALESS_FILES, IOPOL_SCOPE_THREAD)
         let inside = LargeOldDataless.withoutMaterializing {
@@ -273,6 +288,25 @@ struct LargeOldScannerTests {
         #expect(last.found >= files.count)
         #expect(last.filesVisited >= 6, "só conta arquivos fora das pastas puladas")
         #expect(last.foldersVisited >= 5)
+    }
+
+    @Test func unregisteredBundlesStayClosed() async throws {
+        let tree = try LargeOldTestTree()
+        defer { tree.remove() }
+        // Extensão que ninguém registrou, mas com cara de app: não abre.
+        try tree.file("Ferramenta.qwzx/Contents/Info.plist", bytes: 10)
+        try tree.file("Ferramenta.qwzx/Contents/Resources/motor.dat", bytes: big)
+        // Plug-in de áudio (o UTType pode não conhecer .vst3).
+        try tree.file("Synth.vst3/Contents/x86_64-linux/Synth.so", bytes: big)
+        // VM sem o app instalado: entra inteira, sem listar o disco de dentro.
+        try tree.file("Windows.pvm/disco.hdd/dados.hds", bytes: big)
+        // Pasta comum com ponto no nome continua sendo lida.
+        try tree.file("Projeto.v2/render.mov", bytes: big)
+
+        let files = await LargeOldScanner.scan(tree.options(minSize: minSize))
+        let byName = Dictionary(uniqueKeysWithValues: files.map { ($0.name, $0) })
+        #expect(Set(byName.keys) == ["Windows.pvm", "render.mov"])
+        #expect(byName["Windows.pvm"]?.isPackage == true)
     }
 
     @Test func lastUsedFallsBackToModificationAndAccess() async throws {

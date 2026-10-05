@@ -65,6 +65,22 @@ public enum LargeOldScanner {
         "node_modules", "Backups.backupdb", "$RECYCLE.BIN", "System Volume Information",
     ]
 
+    /// Bundles de código que o UTType pode não conhecer (plug-ins de áudio, extensões…): nunca abertos.
+    static let codeBundleExtensions: Set<String> = [
+        "app", "appex", "xpc", "framework", "bundle", "plugin", "kext", "dext", "systemextension", "driver",
+        "component", "vst", "vst3", "aaxplugin", "prefpane", "qlgenerator", "mdimporter", "saver", "wdgt",
+    ]
+
+    /// Pacotes de documento que o UTType só reconhece com o app instalado (VMs, arquivos do Xcode).
+    static let documentPackageExtensions: Set<String> = [
+        "pvm", "vmwarevm", "utm", "xcarchive", "sparsebundle", "rtfd", "pages", "key", "numbers",
+    ]
+
+    /// Raiz de um disco com macOS instalado: sistema e Bibliotecas dele ficam de fora.
+    static let foreignSystemFolders: Set<String> = [
+        "System", "Library", "private", "usr", "bin", "sbin", "opt", "cores",
+    ]
+
     /// Camada a partir da qual as pastas viram unidades paralelas.
     static let splitLevel = 2
 
@@ -154,6 +170,8 @@ struct LargeOldRules: Sendable {
     let protectedPrefixes: [String]
     let allowedRoots: [String]
     let ownPaths: [String]
+    /// "/Volumes/X" quando a raiz está num disco externo que tem macOS instalado.
+    var foreignSystemVolume: String?
 
     init(options: LargeOldScanOptions) {
         rootPath = SafetyGuard.realpathString(options.root.path)
@@ -165,6 +183,16 @@ struct LargeOldRules: Sendable {
         protectedPrefixes = SafetyGuard.protectedPrefixes(home: realHome)
         allowedRoots = [realHome, "/Users/Shared", "/Applications", "/Volumes"]
         ownPaths = SafetyGuard.ownPaths()
+        foreignSystemVolume = rootPath.flatMap(Self.systemVolumeRoot(containing:))
+    }
+
+    static func systemVolumeRoot(containing path: String) -> String? {
+        let parts = path.split(separator: "/", maxSplits: 2, omittingEmptySubsequences: true)
+        guard parts.count >= 2, parts[0] == "Volumes" else { return nil }
+        let volume = "/Volumes/" + parts[1]
+        var st = stat()
+        let looksLikeMac = lstat(volume + "/System/Library", &st) == 0 || lstat(volume + "/private/var", &st) == 0
+        return looksLikeMac ? volume : nil
     }
 
     /// Regras que dependem só do caminho (valem também para a raiz escolhida).
@@ -173,6 +201,12 @@ struct LargeOldRules: Sendable {
         if Exclusions.isExcluded(path: path, in: exclusions) { return false }
         for prefix in protectedPrefixes where path == prefix || path.hasPrefix(prefix + "/") { return false }
         if ownPaths.contains(where: { path == $0 || path.hasPrefix($0 + "/") }) { return false }
+        if let volume = foreignSystemVolume, path.hasPrefix(volume + "/") {
+            // Outro Mac (disco de inicialização externo ou volume de dados): sistema e ~/Library dele não.
+            let rest = path.dropFirst(volume.count + 1).split(separator: "/", maxSplits: 3)
+            if let first = rest.first, LargeOldScanner.foreignSystemFolders.contains(String(first)) { return false }
+            if rest.count >= 3, rest[0] == "Users", rest[2] == "Library" { return false }
+        }
         let asAncestor = path == "/" ? "/" : path + "/"
         return allowedRoots.contains { path == $0 || path.hasPrefix($0 + "/") || $0.hasPrefix(asAncestor) }
     }
@@ -415,14 +449,21 @@ final class LargeOldWorker {
         switch packageKind(ext) {
         case .code: return .skip
         case .document: return .package
-        case .none: return .descend
+        case .none:
+            // Bundle de app que o sistema não registrou (app ausente): tem Contents/Info.plist. Nunca abrir.
+            var st = stat()
+            return lstat(path + "/Contents/Info.plist", &st) == 0 ? .skip : .descend
         }
     }
 
     private func packageKind(_ ext: String) -> LargeOldPackageKind {
         if let cached = packageCache[ext] { return cached }
         let kind: LargeOldPackageKind
-        if let type = UTType(filenameExtension: ext, conformingTo: .directory), !type.isDynamic {
+        if LargeOldScanner.codeBundleExtensions.contains(ext) {
+            kind = .code
+        } else if LargeOldScanner.documentPackageExtensions.contains(ext) {
+            kind = .document
+        } else if let type = UTType(filenameExtension: ext, conformingTo: .directory), !type.isDynamic {
             if type.conforms(to: .bundle) || type.conforms(to: .application) || type.conforms(to: .framework) {
                 kind = .code
             } else if type.conforms(to: .package) {

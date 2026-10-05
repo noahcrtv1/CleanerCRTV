@@ -52,11 +52,15 @@ struct LargeOldView: View {
         .onReceive(NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didUnmountNotification)) { _ in
             Task { await model.refreshVolumes() }
         }
-        .onChange(of: model.issue) { _, issue in
-            guard let issue else { return }
-            app.alert = issue
-            model.issue = nil
-        }
+        .onChange(of: model.issue) { _, issue in show(issue) }
+        // Recusa vinda do Painel enquanto esta tela estava fechada.
+        .onAppear { show(model.issue) }
+    }
+
+    private func show(_ issue: String?) {
+        guard let issue else { return }
+        app.alert = issue
+        model.issue = nil
     }
 
     private var subtitle: String? {
@@ -94,7 +98,7 @@ struct LargeOldView: View {
     }
 
     private func choose(_ root: LargeOldRoot) {
-        if let problem = model.choose(root) { app.alert = problem }
+        model.choose(root)
     }
 
     private func remove() {
@@ -438,7 +442,8 @@ private struct LargeOldRowMenu: View {
 
 @MainActor
 private enum LargeOldFormat {
-    static let home = Paths.home.standardizedFileURL.path
+    /// Caminho real (a varredura entrega caminhos já resolvidos).
+    static let home = Paths.home.resolvingSymlinksInPath().standardizedFileURL.path
 
     static let relativeFormatter: RelativeDateTimeFormatter = {
         let formatter = RelativeDateTimeFormatter()
