@@ -17,6 +17,8 @@ public struct LargeOldFile: Sendable, Identifiable, Hashable {
     public let isPackage: Bool
     /// `lastUsed` veio do Spotlight ("Aberto em" do Finder).
     public let lastUsedFromSpotlight: Bool
+    /// Nome do tipo exibido e ordenado na tabela ("Instalador" para .pkg, .xip…).
+    public let kindTitle: String
 
     public init(url: URL, size: Int64, kind: LargeOldKind, lastUsed: Date, modified: Date? = nil,
                 isPackage: Bool = false, lastUsedFromSpotlight: Bool = false) {
@@ -29,13 +31,14 @@ public struct LargeOldFile: Sendable, Identifiable, Hashable {
         self.modified = modified
         self.isPackage = isPackage
         self.lastUsedFromSpotlight = lastUsedFromSpotlight
+        kindTitle = kind == .diskImage && LargeOldClassifier.isInstaller(url) ? "Instalador" : kind.singularTitle
     }
 
-    /// Para ordenar a coluna "Tipo" pelo nome exibido.
-    public var kindTitle: String { kind.singularTitle }
-
-    // Identidade pelo caminho: deixa Set/diff baratos com dezenas de milhares de linhas.
-    public static func == (lhs: Self, rhs: Self) -> Bool { lhs.url == rhs.url }
+    // Hash só pelo caminho (barato com dezenas de milhares de linhas); igualdade também olha
+    // tamanho e data para a tabela redesenhar a linha quando o mesmo arquivo muda entre varreduras.
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.url == rhs.url && lhs.size == rhs.size && lhs.lastUsed == rhs.lastUsed
+    }
     public func hash(into hasher: inout Hasher) { hasher.combine(url) }
 }
 

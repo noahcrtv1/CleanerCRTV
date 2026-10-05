@@ -68,6 +68,7 @@ public enum LargeOldScanner {
     /// Camada a partir da qual as pastas viram unidades paralelas.
     static let splitLevel = 2
 
+    /// Varre `options.root`. Cancelada, devolve lista vazia (resultado parcial engana: faltariam pastas).
     public static func scan(
         _ options: LargeOldScanOptions,
         progress: (@Sendable (LargeOldProgress) -> Void)? = nil
@@ -83,6 +84,64 @@ public enum LargeOldScanner {
         } onCancel: {
             context.cancel()
         }
+    }
+
+    /// Por que esta pasta não pode ser a raiz da varredura (nil = pode).
+    /// Vale a pasta pessoal (menos a Biblioteca), /Users/Shared e discos externos graváveis.
+    public static func rootProblem(_ url: URL, home: URL = Paths.home, exclusions: [String] = Exclusions.paths) -> String? {
+        rootProblem(rules: LargeOldRules(options: LargeOldScanOptions(root: url, home: home, exclusions: exclusions)), url: url)
+    }
+
+    static func rootProblem(rules: LargeOldRules, url: URL) -> String? {
+        guard let path = rules.rootPath else { return "A pasta não existe mais." }
+        var st = stat()
+        guard lstat(path, &st) == 0, (st.st_mode & S_IFMT) == S_IFDIR else { return "Escolha uma pasta, não um arquivo." }
+        let home = SafetyGuard.canonicalHome
+        let inArea = path == home || path.hasPrefix(home + "/") || path == "/Users/Shared"
+            || path.hasPrefix("/Users/Shared/") || path.hasPrefix("/Volumes/")
+        guard inArea else { return "Escolha a pasta pessoal, uma pasta dentro dela ou um disco externo." }
+        if path == rules.homeLibrary || path.hasPrefix(rules.homeLibrary + "/") {
+            return "A Biblioteca fica de fora: caches e dados de apps são assunto do Lixo do sistema."
+        }
+        if Exclusions.isExcluded(path: path, in: rules.exclusions) {
+            return "Essa pasta está na lista de pastas ignoradas (Ajustes ▸ Ignorar)."
+        }
+        guard rules.isPathAllowed(path) else { return "Essa pasta é protegida e não pode ser analisada." }
+        if (try? URL(fileURLWithPath: path).resourceValues(forKeys: [.volumeIsReadOnlyKey]))?.volumeIsReadOnly == true {
+            return "Esse disco é somente leitura: nada nele pode ser removido."
+        }
+        return nil
+    }
+
+    /// Discos montados que valem como raiz (externos e partições graváveis; sem o disco de inicialização).
+    /// Pode demorar em volumes de rede: chame fora da main.
+    public static func scannableVolumes() -> [LargeOldVolume] {
+        let keys: [URLResourceKey] = [.volumeLocalizedNameKey, .volumeIsRootFileSystemKey, .volumeIsReadOnlyKey,
+                                      .volumeIsLocalKey, .volumeIsBrowsableKey]
+        let urls = FileManager.default.mountedVolumeURLs(includingResourceValuesForKeys: keys,
+                                                         options: [.skipHiddenVolumes]) ?? []
+        return urls.compactMap { url in
+            guard url.path.hasPrefix("/Volumes/"), SafetyGuard.realpathString(url.path) != "/",
+                  let values = try? url.resourceValues(forKeys: Set(keys)),
+                  values.volumeIsRootFileSystem != true, values.volumeIsReadOnly != true,
+                  values.volumeIsBrowsable != false else { return nil }
+            return LargeOldVolume(url: url, name: values.volumeLocalizedName ?? url.lastPathComponent,
+                                  isNetwork: values.volumeIsLocal == false)
+        }
+        .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+    }
+}
+
+public struct LargeOldVolume: Sendable, Hashable, Identifiable {
+    public var id: URL { url }
+    public let url: URL
+    public let name: String
+    public let isNetwork: Bool
+
+    public init(url: URL, name: String, isNetwork: Bool = false) {
+        self.url = url
+        self.name = name
+        self.isNetwork = isNetwork
     }
 }
 
@@ -160,9 +219,10 @@ final class LargeOldScanContext: @unchecked Sendable {
     /// Varredura completa, síncrona (chamada fora do pool cooperativo).
     func run() -> [LargeOldFile] {
         defer { report(LargeOldWorkerDelta(), force: true) }
-        guard let rootPath = rules.rootPath, rules.isPathAllowed(rootPath) else { return [] }
+        guard !isCancelled, let rootPath = rules.rootPath,
+              LargeOldScanner.rootProblem(rules: rules, url: options.root) == nil else { return [] }
         var st = stat()
-        guard lstat(rootPath, &st) == 0, (st.st_mode & S_IFMT) == S_IFDIR else { return [] }
+        guard lstat(rootPath, &st) == 0 else { return [] }
         rootDevice = st.st_dev
 
         // Camadas de cima numa passada só; o resto vira unidades paralelas.
@@ -188,7 +248,7 @@ final class LargeOldScanContext: @unchecked Sendable {
                 worker.finish()
             }
         }
-        return lock.withLock { Self.deduplicated(results, hardLinks: hardLinks) }
+        return lock.withLock { cancelled ? [] : Self.deduplicated(results, hardLinks: hardLinks) }
     }
 
     private func takeUnit() -> String? {

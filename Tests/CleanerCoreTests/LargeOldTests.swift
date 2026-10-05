@@ -30,6 +30,26 @@ struct LargeOldClassifierTests {
         #expect(!LargeOldClassifier.isInstaller(URL(fileURLWithPath: "/x/Disco.dmg")))
     }
 
+    @Test func kindTitleNamesInstallers() {
+        let date = Date()
+        let pkg = LargeOldFile(url: URL(fileURLWithPath: "/x/Setup.pkg"), size: 1, kind: .diskImage, lastUsed: date)
+        let dmg = LargeOldFile(url: URL(fileURLWithPath: "/x/Disco.dmg"), size: 1, kind: .diskImage, lastUsed: date)
+        let mov = LargeOldFile(url: URL(fileURLWithPath: "/x/a.mov"), size: 1, kind: .video, lastUsed: date)
+        #expect(pkg.kindTitle == "Instalador")
+        #expect(dmg.kindTitle == "Imagem de disco")
+        #expect(mov.kindTitle == "Vídeo")
+        #expect(mov.folder == "/x")
+    }
+
+    @Test func equalityTracksChangesButHashesByPath() {
+        let url = URL(fileURLWithPath: "/x/a.mov")
+        let a = LargeOldFile(url: url, size: 100, kind: .video, lastUsed: Date(timeIntervalSince1970: 0))
+        let b = LargeOldFile(url: url, size: 200, kind: .video, lastUsed: Date(timeIntervalSince1970: 0))
+        #expect(a != b)
+        #expect(a.hashValue == b.hashValue)
+        #expect(a == LargeOldFile(url: url, size: 100, kind: .video, lastUsed: Date(timeIntervalSince1970: 0)))
+    }
+
     @Test func pathExtensionIgnoresLeadingDot() {
         #expect(LargeOldRules.pathExtension(of: ".zshrc") == "")
         #expect(LargeOldRules.pathExtension(of: "backup.TAR") == "tar")
@@ -206,6 +226,11 @@ struct LargeOldScannerTests {
         try tree.file("Fotos.photoslibrary/originals/IMG_0001.heic", bytes: big)
         try tree.file("Musicas.musiclibrary/Library.musicdb", bytes: big)
         try tree.file("Edicao.fcpbundle/Evento/filme.mov", bytes: big)
+        try tree.file("Projeto.imovielibrary/filme.mov", bytes: big)
+        try tree.file("Musica.logicx/Media/audio.wav", bytes: big)
+        try tree.file("Demo.band/Media/audio.aif", bytes: big)
+        try tree.file("TV.tvlibrary/filme.m4v", bytes: big)
+        try tree.file("Plugin.bundle/Contents/grande.dat", bytes: big)
         try tree.file("Library/Caches/grande.cache", bytes: big)
         try tree.file("Ignorada/filme.mov", bytes: big)
         // Pacotes de documento entram inteiros (dois arquivos menores que o mínimo somam mais que ele).
@@ -246,7 +271,7 @@ struct LargeOldScannerTests {
 
         let last = try #require(log.all.last)
         #expect(last.found >= files.count)
-        #expect(last.filesVisited >= 10)
+        #expect(last.filesVisited >= 6, "só conta arquivos fora das pastas puladas")
         #expect(last.foldersVisited >= 5)
     }
 
@@ -300,6 +325,36 @@ struct LargeOldScannerTests {
         #expect(await LargeOldScanner.scan(options).isEmpty, "pasta ignorada nunca é varrida")
         options.root = URL(fileURLWithPath: "/System/Library")
         #expect(await LargeOldScanner.scan(options).isEmpty)
+    }
+
+    @Test func validatesRoots() throws {
+        let tree = try LargeOldTestTree()
+        defer { tree.remove() }
+        let file = try tree.file("solto.mov", bytes: 10)
+        try FileManager.default.createDirectory(at: tree.root.appendingPathComponent("Library/Caches"), withIntermediateDirectories: true)
+        let ignored = tree.root.appendingPathComponent("Ignorada")
+        try FileManager.default.createDirectory(at: ignored, withIntermediateDirectories: true)
+
+        func problem(_ url: URL) -> String? {
+            LargeOldScanner.rootProblem(url, home: tree.root, exclusions: [ignored.path])
+        }
+        #expect(problem(tree.root) == nil)
+        #expect(problem(Paths.home) == nil)
+        #expect(problem(file) != nil, "arquivo não é raiz")
+        #expect(problem(tree.root.appendingPathComponent("nao-existe")) != nil)
+        #expect(problem(tree.root.appendingPathComponent("Library")) != nil)
+        #expect(problem(tree.root.appendingPathComponent("Library/Caches")) != nil)
+        #expect(problem(ignored) != nil)
+        #expect(problem(URL(fileURLWithPath: "/")) != nil)
+        #expect(problem(URL(fileURLWithPath: "/System/Library")) != nil)
+        #expect(problem(URL(fileURLWithPath: "/Applications")) != nil)
+        #expect(problem(URL(fileURLWithPath: "/Users")) != nil)
+    }
+
+    @Test func volumesNeverIncludeTheStartupDisk() {
+        let volumes = LargeOldScanner.scannableVolumes()
+        #expect(volumes.allSatisfy { $0.url.path.hasPrefix("/Volumes/") })
+        #expect(volumes.allSatisfy { SafetyGuard.realpathString($0.url.path) != "/" })
     }
 
     @Test func cancelledScanStopsRightAway() async throws {
