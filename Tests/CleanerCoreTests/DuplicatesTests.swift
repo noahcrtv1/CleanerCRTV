@@ -305,6 +305,20 @@ struct DuplicateSelectorTests {
         #expect(step.selection == [b.url])
     }
 
+    @Test func groupCheckboxNeverSelectsEveryCopy() {
+        let a = file("/u/a", created: 1), b = file("/u/b", created: 2), c = file("/u/c", created: 3)
+        let g = group([a, b, c])
+        // Sem nada marcado: marca todas menos a que fica.
+        let on = DuplicateSelector.toggleGroup(g, rule: .oldest, selection: [])
+        #expect(on == [b.url, c.url])
+        // Com alguma marcada: desmarca o grupo inteiro, sem mexer nos outros.
+        let other = URL(fileURLWithPath: "/u/outro")
+        #expect(DuplicateSelector.toggleGroup(g, rule: .oldest, selection: [c.url, other]) == [other])
+        // "Manter só esta".
+        #expect(DuplicateSelector.keepOnly(c.url, in: g, selection: [c.url, other]) == [a.url, b.url, other])
+        #expect(DuplicateSelector.keepOnly(other, in: g, selection: []) == [])
+    }
+
     @Test func enforcingKeepFreesOneCopy() {
         let a = file("/u/a", created: 1), b = file("/u/b", created: 2)
         let other = group([file("/u/c"), file("/u/d")])
@@ -423,6 +437,42 @@ struct DuplicateRootsTests {
         let library = box.path("Fotos.photoslibrary")
         try FileManager.default.createDirectory(at: library, withIntermediateDirectories: true)
         #expect(DuplicateRoots.problem(with: library) != nil)
+    }
+
+    @Test func addingRootsKeepsOrderAndRejectsOverlaps() throws {
+        let box = try DuplicateSandbox(underHome: true)
+        defer { box.cleanUp() }
+        let a = box.path("a"), inner = box.path("a/dentro"), b = box.path("b")
+        for url in [inner, b] { try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true) }
+
+        var step = DuplicateRoots.adding(b, to: [])
+        #expect(step.problem == nil)
+        step = DuplicateRoots.adding(inner, to: step.roots)
+        #expect(step.problem == nil)
+        #expect(step.roots.map(\.lastPathComponent) == ["b", "dentro"])
+        // Repetida ou já coberta: recusada.
+        #expect(DuplicateRoots.adding(b, to: step.roots).problem != nil)
+        // A mãe entra e leva a filha embora.
+        step = DuplicateRoots.adding(a, to: step.roots)
+        #expect(step.problem == nil)
+        #expect(step.roots.map(\.lastPathComponent) == ["b", "a"])
+        #expect(DuplicateRoots.adding(inner, to: step.roots).problem != nil)
+        // Biblioteca recusada.
+        #expect(DuplicateRoots.adding(Paths.library("Caches"), to: []).problem != nil)
+    }
+
+    @Test func groupKindAndPreviewIgnoreMissingExtensions() {
+        let plain = DuplicateFile(url: URL(fileURLWithPath: "/u/copia"), modified: nil, created: nil, allocatedSize: 1)
+        let photo = DuplicateFile(url: URL(fileURLWithPath: "/u/foto.jpg"), modified: nil, created: nil, allocatedSize: 1)
+        let g = DuplicateGroup(id: "g", size: 1, files: [plain, photo])
+        #expect(g.kind == .image)
+        #expect(g.previewFile == photo)
+        #expect(g.removing([plain.url]) == nil)
+        let three = DuplicateGroup(id: "t", size: 10, files: [plain, photo, DuplicateFile(url: URL(fileURLWithPath: "/u/c.jpg"), modified: nil, created: nil, allocatedSize: 1)])
+        let two = three.removing([plain.url])
+        #expect(two?.files.count == 2)
+        #expect(two?.storageCount == 2)
+        #expect(two?.wasted == 10)
     }
 
     @Test func kinds() {

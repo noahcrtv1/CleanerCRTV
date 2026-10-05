@@ -51,23 +51,18 @@ public struct DuplicateGroup: Sendable, Hashable, Identifiable {
     public let id: String
     /// Tamanho lógico de cada cópia.
     public let size: Int64
-    public internal(set) var files: [DuplicateFile]
+    /// O "original" provável primeiro (mais antigo; empate: caminho mais raso).
+    public let files: [DuplicateFile]
     public let kind: DuplicateKind
+    /// Quantos "conteúdos" ocupam disco de verdade: clones APFS do mesmo dado contam uma vez.
+    public let storageCount: Int
 
     init(id: String, size: Int64, files: [DuplicateFile]) {
         self.id = id
         self.size = size
         self.files = files
-        self.kind = DuplicateKind.of(files.first?.url ?? URL(fileURLWithPath: "/"))
-    }
-
-    public var displayName: String { files.first?.name ?? "" }
-
-    /// Espaço das cópias extras, sem considerar clones: tamanho × (cópias − 1).
-    public var wasted: Int64 { size * Int64(max(0, files.count - 1)) }
-
-    /// Quantos "conteúdos" ocupam disco de verdade: clones APFS do mesmo dado contam uma vez.
-    public var storageCount: Int {
+        // Cópias podem ter extensões diferentes ("foto" e "foto.jpg"): vale a primeira que diz o tipo.
+        self.kind = files.lazy.map { DuplicateKind.of($0.url) }.first { $0 != .other } ?? .other
         var clones = Set<UInt64>()
         var count = 0
         for file in files {
@@ -77,8 +72,18 @@ public struct DuplicateGroup: Sendable, Hashable, Identifiable {
                 count += 1
             }
         }
-        return count
+        self.storageCount = count
     }
+
+    public var displayName: String { files.first?.name ?? "" }
+
+    /// Cópia usada para miniatura e pré-visualização (a primeira com extensão que o Quick Look entende).
+    public var previewFile: DuplicateFile? {
+        files.first { DuplicateKind.hasContentThumbnail($0.url) } ?? files.first
+    }
+
+    /// Espaço das cópias extras, sem considerar clones: tamanho × (cópias − 1).
+    public var wasted: Int64 { size * Int64(max(0, files.count - 1)) }
 
     /// O que dá para recuperar de fato deixando uma cópia (exclui o que é clone APFS).
     public var reclaimable: Int64 { size * Int64(max(0, storageCount - 1)) }
@@ -97,9 +102,9 @@ public struct DuplicateGroup: Sendable, Hashable, Identifiable {
 
     /// Grupo sem os arquivos dados; nil quando sobra menos de 2.
     public func removing(_ urls: Set<URL>) -> DuplicateGroup? {
-        var copy = self
-        copy.files.removeAll { urls.contains($0.url) }
-        return copy.files.count >= 2 ? copy : nil
+        let remaining = files.filter { !urls.contains($0.url) }
+        guard remaining.count >= 2 else { return nil }
+        return remaining.count == files.count ? self : DuplicateGroup(id: id, size: size, files: remaining)
     }
 
     /// Bytes que voltam ao disco por arquivo, se `selected` sair e o resto ficar.

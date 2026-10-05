@@ -71,6 +71,28 @@ public enum DuplicateSelector {
         return (result, false)
     }
 
+    /// Caixa do grupo: com alguma cópia marcada, desmarca todas; sem nenhuma, marca todas menos a que fica.
+    public static func toggleGroup(_ group: DuplicateGroup, rule: DuplicateKeepRule,
+                                   selection: Set<URL>) -> Set<URL> {
+        var result = selection
+        let urls = group.files.map(\.url)
+        if urls.contains(where: result.contains) {
+            result.subtract(urls)
+        } else {
+            result.formUnion(selectionKeepingOne(group, rule: rule))
+        }
+        return result
+    }
+
+    /// "Manter só esta": marca todas as outras cópias do grupo e desmarca esta.
+    public static func keepOnly(_ url: URL, in group: DuplicateGroup, selection: Set<URL>) -> Set<URL> {
+        guard group.files.contains(where: { $0.url == url }) else { return selection }
+        var result = selection
+        result.formUnion(group.files.lazy.map(\.url).filter { $0 != url })
+        result.remove(url)
+        return result
+    }
+
     /// Garante pelo menos uma cópia desmarcada por grupo (libera a que a regra manteria).
     public static func enforcingKeep(_ selection: Set<URL>, in groups: [DuplicateGroup],
                                      rule: DuplicateKeepRule = .oldest) -> Set<URL> {

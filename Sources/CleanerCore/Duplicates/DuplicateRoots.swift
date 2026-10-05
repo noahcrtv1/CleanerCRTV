@@ -48,6 +48,28 @@ public enum DuplicateRoots {
         return nil
     }
 
+    /// Junta uma pasta à lista, mantendo a ordem: recusa a inválida ou já coberta por outra
+    /// e tira as que ficam dentro da nova.
+    public static func adding(_ url: URL, to roots: [URL]) -> (roots: [URL], problem: String?) {
+        if let problem = problem(with: url) { return (roots, problem) }
+        let path = canonical(url)
+        let existing = roots.map(canonical)
+        if let parent = existing.first(where: { path == $0 || path.hasPrefix($0 + "/") }) {
+            let name = displayName(URL(fileURLWithPath: path))
+            return (roots, parent == path
+                    ? "“\(name)” já está na busca."
+                    : "“\(name)” já está na busca, dentro de “\(displayName(URL(fileURLWithPath: parent)))”.")
+        }
+        var result = zip(roots, existing).filter { !$0.1.hasPrefix(path + "/") }.map(\.0)
+        result.append(URL(fileURLWithPath: path, isDirectory: true))
+        return (result, nil)
+    }
+
+    /// Nome como o Finder mostra (ex.: "Documentos").
+    public static func displayName(_ url: URL) -> String {
+        FileManager.default.displayName(atPath: url.path)
+    }
+
     /// Caminhos canônicos, sem repetição e sem pastas que já estão dentro de outra da lista.
     public static func normalized(_ roots: [URL]) -> [URL] {
         let paths = roots.map(canonical).sorted { $0.count < $1.count }

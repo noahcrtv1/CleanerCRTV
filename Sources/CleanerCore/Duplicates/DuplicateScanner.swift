@@ -28,6 +28,15 @@ public struct DuplicateScanOptions: Sendable {
 
 public enum DuplicatePhase: Sendable, Equatable {
     case collecting, comparingEdges, comparingContents, finishing
+
+    public var title: String {
+        switch self {
+        case .collecting: "Procurando arquivos…"
+        case .comparingEdges: "Comparando início e fim…"
+        case .comparingContents: "Conferindo o conteúdo byte a byte…"
+        case .finishing: "Organizando os resultados…"
+        }
+    }
 }
 
 public struct DuplicateProgressSnapshot: Sendable, Equatable {
