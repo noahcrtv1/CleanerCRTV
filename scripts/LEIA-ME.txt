@@ -1,0 +1,18 @@
+CleanerCRTV — limpeza, mapa do disco, desinstalador e monitor para macOS
+
+INSTALAR
+1. Arraste CleanerCRTV para a pasta Aplicativos.
+2. Na primeira vez, o macOS avisa que o app não é de um desenvolvedor identificado.
+   Abra Ajustes do Sistema ▸ Privacidade e Segurança e clique em "Abrir Mesmo Assim".
+
+ACESSO TOTAL AO DISCO (recomendado)
+Sem ele, caches de apps, Mail e Safari ficam invisíveis para a varredura.
+Ajustes do Sistema ▸ Privacidade e Segurança ▸ Acesso Total ao Disco ▸ ative o CleanerCRTV.
+O próprio app tem um botão "Abrir Ajustes" que leva direto lá.
+
+SEGURANÇA
+- Por padrão tudo vai para a Lixeira (dá para recuperar). Apagar permanentemente pede confirmação.
+- O app nunca mexe em pastas do sistema; só na sua pasta pessoal, em /Applications e em discos externos.
+- Tudo o que foi removido fica registrado em Histórico.
+
+Requer macOS 26 ou mais novo, Apple Silicon ou Intel.
