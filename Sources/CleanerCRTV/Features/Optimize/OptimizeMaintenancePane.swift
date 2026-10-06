@@ -3,7 +3,7 @@ import SwiftUI
 
 /// Tarefas de manutenção em cartões. As que pedem senha só pedem quando você clica.
 struct OptimizeMaintenancePane: View {
-    @Environment(AppModel.self) private var app
+    @Environment(\.appModel) private var app
 
     var body: some View {
         ScrollView {
@@ -32,7 +32,7 @@ struct OptimizeMaintenancePane: View {
 private struct OptimizeTaskCard: View {
     let task: OptimizeMaintenanceTask
 
-    @Environment(AppModel.self) private var app
+    @Environment(\.appModel) private var app
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var confirming = false
     @State private var showDetails = false

@@ -15,7 +15,7 @@ struct SettingsView: View {
 }
 
 private struct GeneralSettings: View {
-    @Environment(AppModel.self) private var model
+    @Environment(\.appModel) private var model
     @AppStorage("removalMode") private var removalMode = RemovalMode.trash.rawValue
     @AppStorage("showMenuBar") private var showMenuBar = true
     @AppStorage("skipOpening") private var skipOpening = false

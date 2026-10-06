@@ -3,7 +3,7 @@ import SwiftUI
 
 /// "Lixo do sistema": categorias à esquerda, itens da categoria aberta à direita, "Limpar" no rodapé.
 struct CleanupView: View {
-    @Environment(AppModel.self) private var app
+    @Environment(\.appModel) private var app
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var model: CleanupModel { app.cleanup }
@@ -84,7 +84,7 @@ struct CleanupView: View {
 
 private struct CleanupResultsView: View {
     let model: CleanupModel
-    @Environment(AppModel.self) private var app
+    @Environment(\.appModel) private var app
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -135,7 +135,7 @@ private struct CleanupResultsView: View {
 
 private struct CleanupCategoryPane: View {
     let model: CleanupModel
-    @Environment(AppModel.self) private var app
+    @Environment(\.appModel) private var app
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -266,7 +266,7 @@ private struct CleanupAccessNotice: View {
 
 private struct CleanupDetailPane: View {
     @Bindable var model: CleanupModel
-    @Environment(AppModel.self) private var app
+    @Environment(\.appModel) private var app
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var highlighted: Set<URL> = []
 

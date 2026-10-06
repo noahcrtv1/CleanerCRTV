@@ -3,7 +3,7 @@ import SwiftUI
 
 /// "Restos de apps removidos": nada vem marcado.
 struct UninstallOrphansPane: View {
-    @Environment(AppModel.self) private var appModel
+    @Environment(\.appModel) private var appModel
 
     var body: some View {
         let model = appModel.uninstaller
@@ -28,7 +28,7 @@ struct UninstallOrphansPane: View {
 }
 
 private struct UninstallOrphanList: View {
-    @Environment(AppModel.self) private var appModel
+    @Environment(\.appModel) private var appModel
 
     var body: some View {
         let model = appModel.uninstaller
@@ -85,7 +85,7 @@ private struct UninstallOrphanList: View {
 private struct UninstallOrphanGroupRow: View {
     let group: UninstallOrphanGroup
 
-    @Environment(AppModel.self) private var appModel
+    @Environment(\.appModel) private var appModel
 
     var body: some View {
         let model = appModel.uninstaller

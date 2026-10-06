@@ -5,7 +5,7 @@ import SwiftUI
 struct RemovalSheet: View {
     let request: RemovalRequest
 
-    @Environment(AppModel.self) private var model
+    @Environment(\.appModel) private var model
     @Environment(\.dismiss) private var dismiss
     @State private var mode: RemovalMode = .trash
     @State private var understood = false

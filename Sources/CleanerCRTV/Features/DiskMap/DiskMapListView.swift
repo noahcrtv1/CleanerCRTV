@@ -95,7 +95,7 @@ struct DiskMapNodeMenu: View {
     let map: DiskMapModel
     let nodes: [DiskMapNode]
 
-    @Environment(AppModel.self) private var app
+    @Environment(\.appModel) private var app
 
     var body: some View {
         if nodes.count == 1, let node = nodes.first {
@@ -234,7 +234,7 @@ struct DiskMapPathBar: View {
 struct DiskMapListView: View {
     let map: DiskMapModel
 
-    @Environment(AppModel.self) private var app
+    @Environment(\.appModel) private var app
 
     var body: some View {
         @Bindable var map = map
@@ -333,7 +333,7 @@ struct DiskMapListRow: View {
     let largest: Int64
     let color: Color
 
-    @Environment(AppModel.self) private var app
+    @Environment(\.appModel) private var app
     @State private var hovering = false
 
     var body: some View {

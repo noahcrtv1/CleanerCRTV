@@ -15,7 +15,7 @@ struct UninstallAppsPane: View {
 }
 
 private struct UninstallAppList: View {
-    @Environment(AppModel.self) private var appModel
+    @Environment(\.appModel) private var appModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -101,7 +101,7 @@ private struct UninstallAppList: View {
 }
 
 private struct UninstallListFooter: View {
-    @Environment(AppModel.self) private var appModel
+    @Environment(\.appModel) private var appModel
 
     var body: some View {
         let model = appModel.uninstaller

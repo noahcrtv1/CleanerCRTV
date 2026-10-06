@@ -3,7 +3,7 @@ import SwiftUI
 
 /// Faixa no topo pedindo Acesso Total ao Disco.
 struct FullDiskAccessBanner: View {
-    @Environment(AppModel.self) private var model
+    @Environment(\.appModel) private var model
 
     var body: some View {
         HStack(spacing: 12) {
@@ -31,7 +31,7 @@ struct FullDiskAccessBanner: View {
 /// Aviso flutuante de resultado.
 struct ToastView: View {
     let toast: Toast
-    @Environment(AppModel.self) private var model
+    @Environment(\.appModel) private var model
 
     var body: some View {
         HStack(spacing: 10) {

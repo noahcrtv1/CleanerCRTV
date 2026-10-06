@@ -27,7 +27,11 @@ struct Toast: Identifiable, Equatable {
 @Observable
 @MainActor
 final class AppModel {
-    var selection: Feature? = .dashboard
+    /// Instância única do app. Também é o valor padrão de `\.appModel`, para uma view montada
+    /// fora da hierarquia (células de Table, menus) nunca derrubar o app por falta de ambiente.
+    static let shared = AppModel()
+    /// `-startFeature cleanup` na linha de comando abre direto num módulo (testes).
+    var selection: Feature? = UserDefaults.standard.string(forKey: "startFeature").flatMap(Feature.init(rawValue:)) ?? .dashboard
     var showOpening = !UserDefaults.standard.bool(forKey: "skipOpening")
     var fullDiskAccess = FullDiskAccess.isGranted
     var removalRequest: RemovalRequest?
@@ -132,5 +136,16 @@ final class AppModel {
 
     func openFullDiskAccessSettings() {
         NSWorkspace.shared.open(FullDiskAccess.settingsURL)
+    }
+}
+
+private struct AppModelKey: EnvironmentKey {
+    static var defaultValue: AppModel { MainActor.assumeIsolated { AppModel.shared } }
+}
+
+extension EnvironmentValues {
+    var appModel: AppModel {
+        get { self[AppModelKey.self] }
+        set { self[AppModelKey.self] = newValue }
     }
 }

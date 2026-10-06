@@ -2,7 +2,7 @@ import CleanerCore
 import SwiftUI
 
 struct OptimizeView: View {
-    @Environment(AppModel.self) private var app
+    @Environment(\.appModel) private var app
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -50,7 +50,7 @@ struct OptimizeView: View {
 // MARK: - Agentes de inicialização
 
 private struct OptimizeAgentsPane: View {
-    @Environment(AppModel.self) private var app
+    @Environment(\.appModel) private var app
     @State private var selection: Set<OptimizeLaunchAgent.ID> = []
 
     var body: some View {

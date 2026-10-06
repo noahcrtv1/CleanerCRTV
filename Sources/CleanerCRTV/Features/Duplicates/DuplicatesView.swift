@@ -3,7 +3,7 @@ import CleanerCore
 import SwiftUI
 
 struct DuplicatesView: View {
-    @Environment(AppModel.self) private var model
+    @Environment(\.appModel) private var model
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var duplicates: DuplicatesModel { model.duplicates }
@@ -201,7 +201,7 @@ struct DuplicatesView: View {
 struct DuplicateOptionsBar: View {
     let onAddFolders: () -> Void
 
-    @Environment(AppModel.self) private var model
+    @Environment(\.appModel) private var model
 
     var body: some View {
         @Bindable var duplicates = model.duplicates
@@ -305,7 +305,7 @@ struct DuplicateRootChip: View {
 struct DuplicateAutoSelectMenu: View {
     let onPickFolder: () -> Void
 
-    @Environment(AppModel.self) private var model
+    @Environment(\.appModel) private var model
 
     var body: some View {
         let duplicates = model.duplicates

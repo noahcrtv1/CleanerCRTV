@@ -5,7 +5,7 @@ import SwiftUI
 struct DuplicateResultsView: View {
     let onRemove: () -> Void
 
-    @Environment(AppModel.self) private var model
+    @Environment(\.appModel) private var model
 
     var body: some View {
         let duplicates = model.duplicates
@@ -75,7 +75,7 @@ struct DuplicateResultsView: View {
 // MARK: - Lista de grupos
 
 struct DuplicateGroupList: View {
-    @Environment(AppModel.self) private var model
+    @Environment(\.appModel) private var model
 
     var body: some View {
         @Bindable var duplicates = model.duplicates
@@ -212,7 +212,7 @@ struct DuplicateGroupRow: View {
 struct DuplicateGroupDetail: View {
     let group: DuplicateGroup
 
-    @Environment(AppModel.self) private var model
+    @Environment(\.appModel) private var model
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {

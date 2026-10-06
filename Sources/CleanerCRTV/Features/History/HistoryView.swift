@@ -22,7 +22,7 @@ final class HistoryModel {
 }
 
 struct HistoryView: View {
-    @Environment(AppModel.self) private var model
+    @Environment(\.appModel) private var model
     @State private var expanded: Set<UUID> = []
     @State private var confirmClear = false
 

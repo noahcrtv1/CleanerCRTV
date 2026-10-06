@@ -5,13 +5,13 @@ import SwiftUI
 @main
 struct CleanerCRTVApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
-    @State private var model = AppModel()
+    @State private var model = AppModel.shared
     @AppStorage("showMenuBar") private var showMenuBar = true
 
     var body: some Scene {
         Window("CleanerCRTV", id: "main") {
             ContentView()
-                .environment(model)
+                .environment(\.appModel, model)
                 .frame(minWidth: 980, minHeight: 640)
                 .onAppear { delegate.model = model }
         }
@@ -21,15 +21,15 @@ struct CleanerCRTVApp: App {
 
         Settings {
             SettingsView()
-                .environment(model)
+                .environment(\.appModel, model)
         }
 
         MenuBarExtra(isInserted: $showMenuBar) {
             MenuBarPanel()
-                .environment(model)
+                .environment(\.appModel, model)
         } label: {
             MenuBarLabel()
-                .environment(model)
+                .environment(\.appModel, model)
         }
         .menuBarExtraStyle(.window)
     }

@@ -5,7 +5,7 @@ import UniformTypeIdentifiers
 
 /// Mapa do disco: raios de sol + lista (ou colunas), com coleta do que remover.
 struct DiskMapView: View {
-    @Environment(AppModel.self) private var app
+    @Environment(\.appModel) private var app
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var dropTargeted = false
 
@@ -160,7 +160,7 @@ struct DiskMapView: View {
 struct DiskMapColumnsView: View {
     let map: DiskMapModel
 
-    @Environment(AppModel.self) private var app
+    @Environment(\.appModel) private var app
 
     var body: some View {
         let chain = map.focus?.chain ?? []
@@ -201,7 +201,7 @@ private struct DiskMapColumn: View {
     let directory: DiskMapNode
     let selected: DiskMapNode?
 
-    @Environment(AppModel.self) private var app
+    @Environment(\.appModel) private var app
 
     var body: some View {
         // Revision força a releitura dos filhos depois de remoções ou de abrir os arquivos menores.
@@ -266,7 +266,7 @@ private struct DiskMapLeafDetail: View {
     let map: DiskMapModel
     let node: DiskMapNode
 
-    @Environment(AppModel.self) private var app
+    @Environment(\.appModel) private var app
 
     var body: some View {
         VStack(spacing: 12) {
@@ -320,7 +320,7 @@ private struct DiskMapLeafDetail: View {
 struct DiskMapCollectorBar: View {
     let map: DiskMapModel
 
-    @Environment(AppModel.self) private var app
+    @Environment(\.appModel) private var app
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {

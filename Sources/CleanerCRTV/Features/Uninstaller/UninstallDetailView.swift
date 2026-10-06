@@ -3,7 +3,7 @@ import SwiftUI
 
 /// Lado direito: nada, um app ou vários.
 struct UninstallDetailPane: View {
-    @Environment(AppModel.self) private var appModel
+    @Environment(\.appModel) private var appModel
 
     var body: some View {
         let selected = appModel.uninstaller.selectedApps
@@ -28,7 +28,7 @@ struct UninstallDetailPane: View {
 private struct UninstallAppDetail: View {
     let app: UninstallApp
 
-    @Environment(AppModel.self) private var appModel
+    @Environment(\.appModel) private var appModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var model: UninstallerModel { appModel.uninstaller }
@@ -175,7 +175,7 @@ private struct UninstallAppDetail: View {
 private struct UninstallLeftoverGroupCard: View {
     let group: UninstallLeftoverGroup
 
-    @Environment(AppModel.self) private var appModel
+    @Environment(\.appModel) private var appModel
 
     var body: some View {
         let model = appModel.uninstaller
@@ -293,7 +293,7 @@ private struct UninstallTag: View {
 private struct UninstallBatchDetail: View {
     let apps: [UninstallApp]
 
-    @Environment(AppModel.self) private var appModel
+    @Environment(\.appModel) private var appModel
 
     var body: some View {
         let model = appModel.uninstaller
@@ -361,7 +361,7 @@ private struct UninstallBatchDetail: View {
 private struct UninstallBatchRow: View {
     let app: UninstallApp
 
-    @Environment(AppModel.self) private var appModel
+    @Environment(\.appModel) private var appModel
 
     var body: some View {
         let model = appModel.uninstaller

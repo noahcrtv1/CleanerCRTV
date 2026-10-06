@@ -22,7 +22,7 @@ enum MonitorMenuBarStyle: String, CaseIterable, Identifiable {
 
 /// Rótulo do item na barra de menus.
 struct MenuBarLabel: View {
-    @Environment(AppModel.self) private var model
+    @Environment(\.appModel) private var model
     @AppStorage("menuBarStyle") private var style: MonitorMenuBarStyle = .icon
 
     var body: some View {
@@ -69,7 +69,7 @@ struct MenuBarLabel: View {
 
 /// Conteúdo da janelinha do ícone na barra de menus.
 struct MenuBarPanel: View {
-    @Environment(AppModel.self) private var model
+    @Environment(\.appModel) private var model
     @Environment(\.openWindow) private var openWindow
     @AppStorage("menuBarStyle") private var style: MonitorMenuBarStyle = .icon
 

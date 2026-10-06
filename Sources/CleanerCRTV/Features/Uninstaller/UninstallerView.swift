@@ -2,7 +2,7 @@ import CleanerCore
 import SwiftUI
 
 struct UninstallerView: View {
-    @Environment(AppModel.self) private var appModel
+    @Environment(\.appModel) private var appModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var model: UninstallerModel { appModel.uninstaller }
@@ -80,7 +80,7 @@ struct UninstallerView: View {
 
 /// Abas, progresso dos tamanhos e "escanear de novo", à direita do cabeçalho.
 private struct UninstallHeaderControls: View {
-    @Environment(AppModel.self) private var appModel
+    @Environment(\.appModel) private var appModel
 
     var body: some View {
         @Bindable var model = appModel.uninstaller

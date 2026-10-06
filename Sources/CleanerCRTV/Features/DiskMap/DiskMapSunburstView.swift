@@ -208,7 +208,7 @@ struct DiskMapSunburstRenderer {
 struct DiskMapSunburstView: View {
     let map: DiskMapModel
 
-    @Environment(AppModel.self) private var app
+    @Environment(\.appModel) private var app
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var hoverArc: Int?
     @State private var hoverCenter = false

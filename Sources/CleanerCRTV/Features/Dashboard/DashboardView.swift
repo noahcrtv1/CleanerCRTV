@@ -63,7 +63,7 @@ final class DashboardModel {
 }
 
 struct DashboardView: View {
-    @Environment(AppModel.self) private var model
+    @Environment(\.appModel) private var model
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var dashboard: DashboardModel { model.dashboard }
@@ -236,7 +236,7 @@ private struct ScanProgressList: View {
 // MARK: - Resultados
 
 private struct ResultsGrid: View {
-    @Environment(AppModel.self) private var model
+    @Environment(\.appModel) private var model
 
     private let columns = [GridItem(.adaptive(minimum: 280, maximum: 420), spacing: 16)]
 
@@ -291,7 +291,7 @@ private struct ResultCard<Actions: View>: View {
 }
 
 private struct JunkCard: View {
-    @Environment(AppModel.self) private var model
+    @Environment(\.appModel) private var model
 
     var body: some View {
         let cleanup = model.cleanup
@@ -314,7 +314,7 @@ private struct JunkCard: View {
 }
 
 private struct TrashCard: View {
-    @Environment(AppModel.self) private var model
+    @Environment(\.appModel) private var model
     @State private var loading = false
 
     var body: some View {
@@ -341,7 +341,7 @@ private struct TrashCard: View {
 }
 
 private struct SummaryCard: View {
-    @Environment(AppModel.self) private var model
+    @Environment(\.appModel) private var model
     let feature: Feature
     let summary: ScanSummary?
     let empty: String
@@ -371,7 +371,7 @@ private struct SummaryCard: View {
 }
 
 private struct DuplicatesCard: View {
-    @Environment(AppModel.self) private var model
+    @Environment(\.appModel) private var model
 
     var body: some View {
         let duplicates = model.duplicates
@@ -398,7 +398,7 @@ private struct DuplicatesCard: View {
 // MARK: - Antes da primeira varredura
 
 private struct ShortcutGrid: View {
-    @Environment(AppModel.self) private var model
+    @Environment(\.appModel) private var model
     private let columns = [GridItem(.adaptive(minimum: 220, maximum: 360), spacing: 14)]
 
     var body: some View {

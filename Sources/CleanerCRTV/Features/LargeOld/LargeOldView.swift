@@ -3,7 +3,7 @@ import CleanerCore
 import SwiftUI
 
 struct LargeOldView: View {
-    @Environment(AppModel.self) private var app
+    @Environment(\.appModel) private var app
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var choosingFolder = false
 
@@ -120,7 +120,7 @@ struct LargeOldView: View {
 private struct LargeOldRootMenu: View {
     @Binding var choosingFolder: Bool
     let choose: (LargeOldRoot) -> Void
-    @Environment(AppModel.self) private var app
+    @Environment(\.appModel) private var app
 
     var body: some View {
         let model = app.largeOld
@@ -152,7 +152,7 @@ private struct LargeOldRootMenu: View {
 
 private struct LargeOldResults: View {
     let remove: () -> Void
-    @Environment(AppModel.self) private var app
+    @Environment(\.appModel) private var app
 
     var body: some View {
         let model = app.largeOld
@@ -192,7 +192,7 @@ private struct LargeOldResults: View {
 }
 
 private struct LargeOldEmptyState: View {
-    @Environment(AppModel.self) private var app
+    @Environment(\.appModel) private var app
 
     var body: some View {
         let model = app.largeOld
@@ -221,24 +221,22 @@ private struct LargeOldEmptyState: View {
 // MARK: - Filtros
 
 private struct LargeOldFilterBar: View {
-    @Environment(AppModel.self) private var app
+    @Environment(\.appModel) private var app
 
     var body: some View {
         @Bindable var model = app.largeOld
         VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 20) {
-                Picker("Tamanho mínimo", selection: $model.threshold) {
-                    ForEach(LargeOldSizeThreshold.allCases) { Text($0.title).tag($0) }
+            // Janela estreita: busca desce para a própria linha em vez de estourar a largura.
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 20) {
+                    pickers
+                    Spacer(minLength: 8)
+                    LargeOldSearchField(text: $model.searchText)
                 }
-                .pickerStyle(.menu)
-                .fixedSize()
-                Picker("Sem abrir há", selection: $model.age) {
-                    ForEach(LargeOldAge.allCases) { Text($0.title).tag($0) }
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(spacing: 20) { pickers }
+                    LargeOldSearchField(text: $model.searchText)
                 }
-                .pickerStyle(.segmented)
-                .fixedSize()
-                Spacer(minLength: 8)
-                LargeOldSearchField(text: $model.searchText)
             }
             .padding(.horizontal, 28)
             ScrollView(.horizontal, showsIndicators: false) {
@@ -262,6 +260,20 @@ private struct LargeOldFilterBar: View {
             .contentMargins(.horizontal, 28, for: .scrollContent)
         }
         .padding(.bottom, 12)
+    }
+
+    @ViewBuilder private var pickers: some View {
+        @Bindable var model = app.largeOld
+        Picker("Tamanho mínimo", selection: $model.threshold) {
+            ForEach(LargeOldSizeThreshold.allCases) { Text($0.title).tag($0) }
+        }
+        .pickerStyle(.menu)
+        .fixedSize()
+        Picker("Sem abrir há", selection: $model.age) {
+            ForEach(LargeOldAge.allCases) { Text($0.title).tag($0) }
+        }
+        .pickerStyle(.segmented)
+        .fixedSize()
     }
 
     private func allTotal(_ model: LargeOldModel) -> LargeOldKindTotal {
@@ -333,13 +345,14 @@ private struct LargeOldSearchField: View {
 // MARK: - Tabela
 
 private struct LargeOldTable: View {
-    @Environment(AppModel.self) private var app
+    @Environment(\.appModel) private var app
 
     var body: some View {
         @Bindable var model = app.largeOld
+        let largeOld = app.largeOld
         Table(model.visible, selection: $model.tableSelection, sortOrder: $model.sortOrder) {
             TableColumn("") { file in
-                LargeOldCheckCell(file: file)
+                LargeOldCheckCell(file: file, model: largeOld)
             }
             .width(22)
             TableColumn("Nome", value: \.name) { file in
@@ -379,7 +392,7 @@ private struct LargeOldTable: View {
         }
         .tableStyle(.inset(alternatesRowBackgrounds: true))
         .contextMenu(forSelectionType: URL.self) { urls in
-            LargeOldRowMenu(urls: urls)
+            LargeOldRowMenu(urls: urls, model: largeOld)
         } primaryAction: { urls in
             quickLook(urls)
         }
@@ -399,10 +412,10 @@ private struct LargeOldTable: View {
 
 private struct LargeOldCheckCell: View {
     let file: LargeOldFile
-    @Environment(AppModel.self) private var app
+    // Sem @Environment aqui: células e menus de Table podem ser montados fora da hierarquia (crash).
+    let model: LargeOldModel
 
     var body: some View {
-        let model = app.largeOld
         TriStateCheckbox(state: model.isChecked(file) ? .on : .off, tint: Feature.largeOld.tint) {
             model.toggle(file)
         }
@@ -412,10 +425,9 @@ private struct LargeOldCheckCell: View {
 
 private struct LargeOldRowMenu: View {
     let urls: Set<URL>
-    @Environment(AppModel.self) private var app
+    let model: LargeOldModel
 
     var body: some View {
-        let model = app.largeOld
         let rows = model.visible.filter { urls.contains($0.url) }
         if rows.count == 1, let file = rows.first {
             FileContextMenu(url: file.url)

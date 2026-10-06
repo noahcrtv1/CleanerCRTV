@@ -4,7 +4,7 @@ import SwiftUI
 
 /// Tela Monitor: processador, memória, disco, rede, sistema e processos em tempo real.
 struct MonitorView: View {
-    @Environment(AppModel.self) private var model
+    @Environment(\.appModel) private var model
 
     var body: some View {
         let monitor = model.monitor
@@ -338,7 +338,7 @@ private struct MonitorStripLabelStyle: LabelStyle {
 
 private struct MonitorProcessCard: View {
     let monitor: MonitorModel
-    @Environment(AppModel.self) private var model
+    @Environment(\.appModel) private var model
     @State private var selection: MonitorRowID?
     @State private var forceTarget: MonitorProcessRow?
 

@@ -2,7 +2,7 @@ import CleanerCore
 import SwiftUI
 
 struct ContentView: View {
-    @Environment(AppModel.self) private var model
+    @Environment(\.appModel) private var model
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -16,8 +16,11 @@ struct ContentView: View {
                     FullDiskAccessBanner()
                         .transition(.move(edge: .top).combined(with: .opacity))
                 }
+                // minHeight 0: listas longas não podem virar o tamanho mínimo da janela
+                // (com .contentMinSize a janela cresceria até a lista inteira e empurraria o resto para fora).
                 detail
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
+                    .clipped()
             }
             .animation(Motion.standard(reduceMotion), value: model.fullDiskAccess)
         }
@@ -45,6 +48,11 @@ struct ContentView: View {
         }
         .toolbar(removing: .title)
         .background(WindowAccessor { model.mainWindow = $0 })
+        .task {
+            // `-autoScan YES` escaneia o módulo inicial ao abrir (testes).
+            guard UserDefaults.standard.bool(forKey: "autoScan"), let feature = model.selection else { return }
+            await model.scanner(for: feature)?.scan()
+        }
     }
 
     @ViewBuilder private var detail: some View {

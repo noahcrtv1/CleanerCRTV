@@ -4,7 +4,7 @@ import SwiftUI
 
 /// "Itens de início": lista legada "Abrir ao iniciar sessão", lida pelo Eventos do Sistema.
 struct OptimizeLoginItemsPane: View {
-    @Environment(AppModel.self) private var app
+    @Environment(\.appModel) private var app
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var confirming: OptimizeLoginItem?
 
