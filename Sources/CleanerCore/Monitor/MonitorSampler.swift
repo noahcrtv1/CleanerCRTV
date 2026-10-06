@@ -25,10 +25,9 @@ public actor MonitorSampler {
     // Base para as taxas
     private var lastInstant: ContinuousClock.Instant?
     private var lastTicks: [MonitorCPUTicks] = []
-    private var lastNet: (rx: UInt64, tx: UInt64)?
-    private var lastDisk: (read: UInt64, write: UInt64)?
+    private var lastNet: [String: MonitorIOCount] = [:]
+    private var lastDisk: [UInt64: MonitorIOCount] = [:]
     private var netBuffer: [UInt8] = []
-    private var countedInterfaces: [UInt16: Bool] = [:]
 
     // Leituras caras, com validade própria
     private var volume: VolumeUsage?
@@ -48,6 +47,8 @@ public actor MonitorSampler {
     private var identities: [pid_t: Identity] = [:]
     private var lastProcessTimes: [pid_t: (start: UInt64, cpu: UInt64)] = [:]
     private var lastProcessInstant: ContinuousClock.Instant?
+    private var lastProcesses: [MonitorProcess] = []
+    private var lastProcessesValid = false
     private var pidBuffer: [pid_t] = []
 
     public init() {}
@@ -66,25 +67,27 @@ public actor MonitorSampler {
         var disk: MonitorDiskIO?
         if !tooSoon {
             let ticks = MonitorSystem.cpuTicks(host: host)
-            let net = MonitorSystem.networkCounters(buffer: &netBuffer, counted: &countedInterfaces)
+            let net = MonitorSystem.networkCounters(buffer: &netBuffer)
             let io = MonitorSystem.diskCounters()
             if ratesValid, let seconds = elapsed {
                 cpu = MonitorMath.cpuUsage(previous: lastTicks, current: ticks)
                 cpu?.loadAverage = MonitorSystem.loadAverage()
-                if let net, let old = lastNet {
-                    network = MonitorNetwork(inPerSecond: MonitorMath.rate(previous: old.rx, current: net.rx, seconds: seconds),
-                                             outPerSecond: MonitorMath.rate(previous: old.tx, current: net.tx, seconds: seconds),
-                                             totalIn: net.rx, totalOut: net.tx)
+                if let net {
+                    let rates = MonitorMath.rates(previous: lastNet, current: net, seconds: seconds)
+                    let totals = MonitorMath.totals(net)
+                    network = MonitorNetwork(inPerSecond: rates.input, outPerSecond: rates.output,
+                                             totalIn: totals.input, totalOut: totals.output)
                 }
-                if let io, let old = lastDisk {
-                    disk = MonitorDiskIO(readPerSecond: MonitorMath.rate(previous: old.read, current: io.read, seconds: seconds),
-                                         writePerSecond: MonitorMath.rate(previous: old.write, current: io.write, seconds: seconds),
-                                         totalRead: io.read, totalWritten: io.write)
+                if let io {
+                    let rates = MonitorMath.rates(previous: lastDisk, current: io, seconds: seconds)
+                    let totals = MonitorMath.totals(io)
+                    disk = MonitorDiskIO(readPerSecond: rates.input, writePerSecond: rates.output,
+                                         totalRead: totals.input, totalWritten: totals.output)
                 }
             }
             lastTicks = ticks
-            lastNet = net
-            lastDisk = io
+            lastNet = net ?? [:]
+            lastDisk = io ?? [:]
             lastInstant = now
         }
 
@@ -127,9 +130,11 @@ public actor MonitorSampler {
             apps = MonitorMath.groupByApp(result.processes)
             processCPUValid = result.valid
         } else if lastProcessInstant != nil {
-            // Sem tela detalhada: solta a base (a próxima abertura recomeça do zero).
+            // Sem tela detalhada: solta a base e os caches (a próxima abertura recomeça do zero).
             lastProcessTimes = [:]
             lastProcessInstant = nil
+            lastProcesses = []
+            identities = [:]
         }
 
         return MonitorSnapshot(date: Date(), cpu: cpu, network: network, disk: disk, memory: memory,
@@ -144,6 +149,8 @@ public actor MonitorSampler {
     /// Só dá para ler processos do próprio usuário; os outros são pulados em silêncio.
     private func sampleProcesses(now: ContinuousClock.Instant) -> (processes: [MonitorProcess], valid: Bool) {
         let elapsed = lastProcessInstant.map { Self.seconds(now - $0) }
+        // Chamado de novo logo em seguida (tela reaberta): repete a leitura anterior em vez de zerar a CPU.
+        if let elapsed, elapsed < Self.minGap { return (lastProcesses, lastProcessesValid) }
         let valid = elapsed.map { $0 >= Self.minGap && $0 <= Self.maxGap } ?? false
         let wallNanos = UInt64(max(0, elapsed ?? 0) * 1_000_000_000)
 
@@ -181,6 +188,8 @@ public actor MonitorSampler {
         }
         lastProcessTimes = times
         lastProcessInstant = now
+        lastProcesses = processes
+        lastProcessesValid = valid
         if identities.count > times.count + 256 {
             identities = identities.filter { times[$0.key] != nil }
         }

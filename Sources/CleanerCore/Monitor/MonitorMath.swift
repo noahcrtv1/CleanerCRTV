@@ -33,11 +33,34 @@ public enum MonitorMath {
         return value <= maxPlausibleRate ? value : 0
     }
 
+    /// Soma as taxas de vários contadores (uma interface ou um disco cada). Só entra quem aparece
+    /// nas duas leituras: um disco recém-conectado não vira pico com o total acumulado dele.
+    public static func rates<Key: Hashable>(previous: [Key: MonitorIOCount], current: [Key: MonitorIOCount],
+                                            seconds: Double) -> (input: Double, output: Double) {
+        var input = 0.0, output = 0.0
+        for (key, now) in current {
+            guard let old = previous[key] else { continue }
+            input += rate(previous: old.input, current: now.input, seconds: seconds)
+            output += rate(previous: old.output, current: now.output, seconds: seconds)
+        }
+        return (input, output)
+    }
+
+    public static func totals<Key: Hashable>(_ counters: [Key: MonitorIOCount]) -> MonitorIOCount {
+        counters.values.reduce(into: MonitorIOCount(input: 0, output: 0)) {
+            $0.input &+= $1.input
+            $0.output &+= $1.output
+        }
+    }
+
     /// Converte unidades de `mach_absolute_time` (e de `rusage_info`) em nanossegundos sem estourar.
     public static func machToNanoseconds(_ ticks: UInt64, numer: UInt32, denom: UInt32) -> UInt64 {
         guard denom != 0, numer != denom else { return ticks }
-        let n = UInt64(numer), d = UInt64(denom)
-        return ticks / d * n + ticks % d * n / d
+        let d = UInt64(denom)
+        // Produto em 128 bits; se nem assim couber, satura em vez de derrubar o app.
+        let product = ticks.multipliedFullWidth(by: UInt64(numer))
+        guard product.high < d else { return .max }
+        return d.dividingFullWidth(product).quotient
     }
 
     /// Fração de um núcleo usada por um processo (1 = 100%).
@@ -164,6 +187,21 @@ public enum MonitorFormat {
         return "\(tenths / 10)\(separator)\(tenths % 10)%"
     }
 
+    /// Memória em base 1024, como o Monitor de Atividade: "24 GB", "18,8 GB", "512 MB".
+    public static func memory(_ bytes: Int64, separator: String = decimalSeparator) -> String {
+        let units = ["KB", "MB", "GB", "TB"]
+        var value = Double(Swift.max(0, bytes)) / 1024
+        var unit = 0
+        while value >= 999.5, unit < units.count - 1 {
+            value /= 1024
+            unit += 1
+        }
+        guard value < 99.95 else { return "\(Int(value.rounded())) \(units[unit])" }
+        let tenths = Int((value * 10).rounded())
+        let text = tenths % 10 == 0 ? "\(tenths / 10)" : "\(tenths / 10)\(separator)\(tenths % 10)"
+        return "\(text) \(units[unit])"
+    }
+
     /// "3 d 4 h", "5 h 12 min", "7 min".
     public static func uptime(_ seconds: TimeInterval) -> String {
         let minutes = Int(Swift.max(0, seconds.isFinite ? seconds : 0)) / 60
@@ -189,5 +227,33 @@ public enum MonitorFormat {
             return "\(tenths / 10)\(separator)\(tenths % 10)"
         }
         return "\(Int(value.rounded()))"
+    }
+}
+
+// MARK: - Encerrar apps
+
+/// Quem pode ser encerrado pelo monitor: só apps comuns do usuário (com janela e Dock),
+/// nunca componentes do sistema nem o próprio CleanerCRTV.
+public enum MonitorTerminationPolicy {
+    static let protectedPrefixes = ["/System/Library/", "/System/iOSSupport/", "/Library/Apple/",
+                                    "/usr/", "/bin/", "/sbin/"]
+    static let protectedBundleIDs: Set<String> = [
+        "com.apple.finder", "com.apple.dock", "com.apple.loginwindow", "com.apple.systemuiserver",
+        "com.apple.controlcenter", "com.apple.notificationcenterui", "com.apple.WindowManager",
+        "com.apple.Spotlight", "com.apple.SecurityAgent", "com.apple.coreservices.uiagent",
+    ]
+
+    /// `isRegularApp` = `NSRunningApplication.activationPolicy == .regular`.
+    public static func canTerminate(pid: Int32, bundlePath: String?, bundleIdentifier: String?,
+                                    isRegularApp: Bool, ownPID: Int32) -> Bool {
+        guard isRegularApp, pid > 1, pid != ownPID, let bundlePath, bundlePath.hasSuffix(".app") else { return false }
+        if let bundleIdentifier, protectedBundleIDs.contains(bundleIdentifier) { return false }
+        let path = bundlePath.hasSuffix("/") ? bundlePath : bundlePath + "/"
+        return !protectedPrefixes.contains { path.hasPrefix($0) }
+    }
+
+    /// Apps de sistema ficam fora da lista "mais memória" do menu (não dá para fazer nada com eles).
+    public static func isSystemBundle(_ bundlePath: String) -> Bool {
+        protectedPrefixes.contains { bundlePath.hasPrefix($0) }
     }
 }

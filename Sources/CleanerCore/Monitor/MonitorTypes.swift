@@ -150,6 +150,17 @@ public struct MonitorMemory: Sendable, Equatable {
 
 // MARK: - Disco, rede, bateria
 
+/// Par de contadores crescentes desde o boot (rede: recebido/enviado; disco: lido/gravado).
+public struct MonitorIOCount: Sendable, Equatable {
+    public var input: UInt64
+    public var output: UInt64
+
+    public init(input: UInt64, output: UInt64) {
+        self.input = input
+        self.output = output
+    }
+}
+
 public struct MonitorDiskIO: Sendable, Equatable {
     public var readPerSecond: Double
     public var writePerSecond: Double

@@ -71,9 +71,9 @@ enum MonitorSystem {
 
     // MARK: Rede
 
-    /// Bytes recebidos/enviados desde o boot nas interfaces físicas (contadores de 64 bits).
-    /// `buffer` e `counted` são reaproveitados entre chamadas para não alocar a cada leitura.
-    static func networkCounters(buffer: inout [UInt8], counted: inout [UInt16: Bool]) -> (rx: UInt64, tx: UInt64)? {
+    /// Bytes recebidos/enviados desde o boot por interface física (contadores de 64 bits).
+    /// `buffer` é reaproveitado entre chamadas para não alocar a cada leitura.
+    static func networkCounters(buffer: inout [UInt8]) -> [String: MonitorIOCount]? {
         var mib: [Int32] = [CTL_NET, PF_ROUTE, 0, 0, NET_RT_IFLIST2, 0]
         var needed = 0
         guard Darwin.sysctl(&mib, 6, nil, &needed, nil, 0) == 0, needed > 0 else { return nil }
@@ -81,63 +81,67 @@ enum MonitorSystem {
         var size = buffer.count
         let status = buffer.withUnsafeMutableBytes { Darwin.sysctl(&mib, 6, $0.baseAddress, &size, nil, 0) }
         guard status == 0 else { return nil }
-
-        var rx: UInt64 = 0, tx: UInt64 = 0
-        buffer.withUnsafeBytes { raw in
-            var offset = 0
-            while offset + MemoryLayout<if_msghdr>.size <= size {
-                let header = raw.loadUnaligned(fromByteOffset: offset, as: if_msghdr.self)
-                let length = Int(header.ifm_msglen)
-                guard length > 0 else { break }
-                if Int32(header.ifm_type) == RTM_IFINFO2, offset + MemoryLayout<if_msghdr2>.size <= size {
-                    let message = raw.loadUnaligned(fromByteOffset: offset, as: if_msghdr2.self)
-                    let index = message.ifm_index
-                    let include: Bool
-                    if let cached = counted[index] {
-                        include = cached
-                    } else {
-                        include = (message.ifm_flags & IFF_LOOPBACK) == 0
-                            && interfaceName(index).map(MonitorMath.isCountedInterface) == true
-                        counted[index] = include
-                    }
-                    if include {
-                        rx &+= message.ifm_data.ifi_ibytes
-                        tx &+= message.ifm_data.ifi_obytes
-                    }
-                }
-                offset += length
-            }
-        }
-        return (rx, tx)
+        return buffer.withUnsafeBytes { parseInterfaceList(UnsafeRawBufferPointer(rebasing: $0[..<min(size, $0.count)])) }
     }
 
-    private static func interfaceName(_ index: UInt16) -> String? {
-        var name = [CChar](repeating: 0, count: Int(IF_NAMESIZE) + 1)
-        guard if_indextoname(UInt32(index), &name) != nil else { return nil }
-        return string(from: name)
+    /// Percorre as mensagens RTM_IFINFO2 de NET_RT_IFLIST2. O nome vem do `sockaddr_dl` logo
+    /// depois do cabeçalho (sem `if_indextoname`, que faria outra chamada por interface).
+    static func parseInterfaceList(_ raw: UnsafeRawBufferPointer) -> [String: MonitorIOCount] {
+        let headerSize = MemoryLayout<if_msghdr2>.size
+        var result: [String: MonitorIOCount] = [:]
+        var offset = 0
+        while offset + MemoryLayout<if_msghdr>.size <= raw.count {
+            let header = raw.loadUnaligned(fromByteOffset: offset, as: if_msghdr.self)
+            let length = Int(header.ifm_msglen)
+            guard length > 0, offset + length <= raw.count else { break }
+            if Int32(header.ifm_type) == RTM_IFINFO2, length >= headerSize {
+                let message = raw.loadUnaligned(fromByteOffset: offset, as: if_msghdr2.self)
+                if message.ifm_flags & IFF_LOOPBACK == 0,
+                   let name = linkName(raw, from: offset + headerSize, to: offset + length),
+                   MonitorMath.isCountedInterface(name) {
+                    result[name] = MonitorIOCount(input: message.ifm_data.ifi_ibytes, output: message.ifm_data.ifi_obytes)
+                }
+            }
+            offset += length
+        }
+        return result
+    }
+
+    private static let nameLengthOffset = MemoryLayout<sockaddr_dl>.offset(of: \sockaddr_dl.sdl_nlen) ?? 5
+    private static let nameOffset = MemoryLayout<sockaddr_dl>.offset(of: \sockaddr_dl.sdl_data) ?? 8
+
+    private static func linkName(_ raw: UnsafeRawBufferPointer, from start: Int, to end: Int) -> String? {
+        guard start + nameOffset <= end, Int32(raw[start + 1]) == AF_LINK else { return nil }
+        let length = Int(raw[start + nameLengthOffset])
+        guard length > 0, start + nameOffset + length <= end else { return nil }
+        // Nomes curtos ("en0", "pdp_ip0") cabem na string inline: sem alocar.
+        return String(decoding: UnsafeRawBufferPointer(rebasing: raw[(start + nameOffset)..<(start + nameOffset + length)]),
+                      as: UTF8.self)
     }
 
     // MARK: Disco
 
-    /// Bytes lidos/gravados desde o boot, somando todos os drivers de armazenamento em bloco.
-    static func diskCounters() -> (read: UInt64, write: UInt64)? {
+    /// Bytes lidos/gravados desde o boot por driver de armazenamento em bloco (chave: id no IORegistry).
+    static func diskCounters() -> [UInt64: MonitorIOCount]? {
         var iterator: io_iterator_t = 0
         guard IOServiceGetMatchingServices(kIOMainPortDefault, IOServiceMatching("IOBlockStorageDriver"), &iterator) == KERN_SUCCESS else {
             return nil
         }
         defer { IOObjectRelease(iterator) }
-        var read: UInt64 = 0, write: UInt64 = 0
+        var result: [UInt64: MonitorIOCount] = [:]
         var service = IOIteratorNext(iterator)
         while service != 0 {
-            if let stats = IORegistryEntryCreateCFProperty(service, "Statistics" as CFString, kCFAllocatorDefault, 0)?
+            var id: UInt64 = 0
+            if IORegistryEntryGetRegistryEntryID(service, &id) == KERN_SUCCESS,
+               let stats = IORegistryEntryCreateCFProperty(service, "Statistics" as CFString, kCFAllocatorDefault, 0)?
                 .takeRetainedValue() as? [String: Any] {
-                read &+= (stats["Bytes (Read)"] as? NSNumber)?.uint64Value ?? 0
-                write &+= (stats["Bytes (Write)"] as? NSNumber)?.uint64Value ?? 0
+                result[id] = MonitorIOCount(input: (stats["Bytes (Read)"] as? NSNumber)?.uint64Value ?? 0,
+                                            output: (stats["Bytes (Write)"] as? NSNumber)?.uint64Value ?? 0)
             }
             IOObjectRelease(service)
             service = IOIteratorNext(iterator)
         }
-        return (read, write)
+        return result
     }
 
     // MARK: Bateria

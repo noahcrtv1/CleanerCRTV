@@ -51,8 +51,9 @@ struct MonitorCPUTests {
         #expect(MonitorMath.machToNanoseconds(24_000_000, numer: 125, denom: 3) == 1_000_000_000)
         #expect(MonitorMath.machToNanoseconds(12345, numer: 1, denom: 1) == 12345)
         #expect(MonitorMath.machToNanoseconds(10, numer: 5, denom: 0) == 10)
-        // Sem estourar com valores enormes.
-        #expect(MonitorMath.machToNanoseconds(UInt64.max / 2, numer: 125, denom: 3) > UInt64.max / 2)
+        // Valores enormes: exato enquanto couber em 64 bits, saturado depois (nunca derruba o app).
+        #expect(MonitorMath.machToNanoseconds(3_000_000_000_000_000, numer: 125, denom: 3) == 125_000_000_000_000_000)
+        #expect(MonitorMath.machToNanoseconds(UInt64.max / 2, numer: 125, denom: 3) == UInt64.max)
         // 1,5 s de CPU em 1 s de relógio = 150% (um núcleo e meio).
         #expect(MonitorMath.cpuFraction(cpuNanos: 1_500_000_000, wallNanos: 1_000_000_000) == 1.5)
         #expect(MonitorMath.cpuFraction(cpuNanos: 10, wallNanos: 0) == 0)
@@ -64,9 +65,9 @@ struct MonitorMemoryTests {
     let page: UInt64 = 16_384
     let physical: UInt64 = 16 * 1_073_741_824
 
-    func vm(internal: UInt32, purgeable: UInt32, wired: UInt32, compressor: UInt32, external: UInt32) -> vm_statistics64 {
+    func vm(internal internalPages: UInt32, purgeable: UInt32, wired: UInt32, compressor: UInt32, external: UInt32) -> vm_statistics64 {
         var vm = vm_statistics64()
-        vm.internal_page_count = internal
+        vm.internal_page_count = internalPages
         vm.purgeable_count = purgeable
         vm.wire_count = wired
         vm.compressor_page_count = compressor
@@ -169,6 +170,14 @@ struct MonitorRateTests {
         #expect(MonitorFormat.percent(-0.2) == "0%")
         #expect(MonitorFormat.percent(0.1234, decimals: 1, separator: ",") == "12,3%")
         #expect(MonitorFormat.percent(2.5, decimals: 1, separator: ",") == "250,0%")
+    }
+
+    @Test func memoryText() {
+        #expect(MonitorFormat.memory(24 * 1_073_741_824, separator: ",") == "24 GB")
+        #expect(MonitorFormat.memory(20_190_000_000, separator: ",") == "18,8 GB")
+        #expect(MonitorFormat.memory(512 * 1_048_576, separator: ",") == "512 MB")
+        #expect(MonitorFormat.memory(1_395_864_371, separator: ",") == "1,3 GB")
+        #expect(MonitorFormat.memory(-1, separator: ",") == "0 KB")
     }
 
     @Test func durations() {
@@ -327,5 +336,112 @@ struct MonitorSamplerTests {
         #expect(info.logicalCores > 0)
         #expect(info.physicalMemory > 0)
         #expect(info.osVersion.hasPrefix("macOS "))
+    }
+}
+
+@Suite("Monitor · Contadores por interface e disco")
+struct MonitorCounterTests {
+    @Test func summedRatesIgnoreNewAndResetCounters() {
+        let before: [String: MonitorIOCount] = [
+            "en0": MonitorIOCount(input: 1_000, output: 500),
+            "en1": MonitorIOCount(input: 9_000_000, output: 9_000_000),
+        ]
+        let after: [String: MonitorIOCount] = [
+            "en0": MonitorIOCount(input: 3_000, output: 1_500),
+            // Interface reiniciada: contador voltou. Não pode virar taxa negativa nem gigante.
+            "en1": MonitorIOCount(input: 10, output: 20),
+            // Recém-conectada com 5 GB acumulados: só conta a partir da próxima leitura.
+            "en7": MonitorIOCount(input: 5_000_000_000, output: 5_000_000_000),
+        ]
+        let rates = MonitorMath.rates(previous: before, current: after, seconds: 2)
+        #expect(rates.input == 1_000)
+        #expect(rates.output == 500)
+        #expect(MonitorMath.rates(previous: [:], current: after, seconds: 2) == (0, 0))
+        #expect(MonitorMath.rates(previous: before, current: after, seconds: 0) == (0, 0))
+    }
+
+    @Test func totalsWrapInsteadOfCrashing() {
+        let counters: [UInt64: MonitorIOCount] = [1: MonitorIOCount(input: .max, output: 1), 2: MonitorIOCount(input: 2, output: 2)]
+        let totals = MonitorMath.totals(counters)
+        #expect(totals.input == 1)
+        #expect(totals.output == 3)
+    }
+
+    /// Monta a saída de NET_RT_IFLIST2 à mão: cabeçalho `if_msghdr2` + `sockaddr_dl` com o nome.
+    private func message(name: String, rx: UInt64, tx: UInt64, loopback: Bool = false) -> [UInt8] {
+        let nameBytes = Array(name.utf8)
+        var link: [UInt8] = [0, UInt8(AF_LINK), 1, 0, 6, UInt8(nameBytes.count), 0, 0] + nameBytes
+        link += [UInt8](repeating: 0, count: max(0, 20 - link.count))
+        link[0] = UInt8(link.count)
+        var header = if_msghdr2()
+        header.ifm_msglen = UInt16(MemoryLayout<if_msghdr2>.size + link.count)
+        header.ifm_type = UInt8(RTM_IFINFO2)
+        header.ifm_addrs = RTA_IFP
+        header.ifm_flags = loopback ? IFF_LOOPBACK | IFF_UP : IFF_UP
+        header.ifm_data.ifi_ibytes = rx
+        header.ifm_data.ifi_obytes = tx
+        return withUnsafeBytes(of: &header) { Array($0) } + link
+    }
+
+    @Test func parsesInterfaceListAndKeepsOnlyPhysicalInterfaces() {
+        var buffer = message(name: "en0", rx: 1_000, tx: 2_000)
+        buffer += message(name: "lo0", rx: 50, tx: 50, loopback: true)
+        buffer += message(name: "utun4", rx: 900, tx: 900)
+        buffer += message(name: "pdp_ip0", rx: 7, tx: 8)
+        let counters = buffer.withUnsafeBytes { MonitorSystem.parseInterfaceList($0) }
+        #expect(counters.count == 2)
+        #expect(counters["en0"] == MonitorIOCount(input: 1_000, output: 2_000))
+        #expect(counters["pdp_ip0"] == MonitorIOCount(input: 7, output: 8))
+    }
+
+    @Test func truncatedInterfaceListStopsSafely() {
+        let buffer = message(name: "en0", rx: 1, tx: 1)
+        let counters = buffer.withUnsafeBytes { MonitorSystem.parseInterfaceList(UnsafeRawBufferPointer(rebasing: $0[..<($0.count - 4)])) }
+        #expect(counters.isEmpty)
+        #expect([UInt8]().withUnsafeBytes { MonitorSystem.parseInterfaceList($0) }.isEmpty)
+    }
+
+    @Test func realCountersAreReadable() throws {
+        var buffer: [UInt8] = []
+        let net = try #require(MonitorSystem.networkCounters(buffer: &buffer))
+        #expect(net.keys.allSatisfy(MonitorMath.isCountedInterface))
+        #expect(MonitorSystem.diskCounters() != nil)
+    }
+}
+
+@Suite("Monitor · Encerrar apps")
+struct MonitorTerminationTests {
+    let own: Int32 = 999
+
+    @Test func regularUserAppsCanBeTerminated() {
+        #expect(MonitorTerminationPolicy.canTerminate(pid: 500, bundlePath: "/Applications/Safari.app",
+                                                      bundleIdentifier: "com.apple.Safari", isRegularApp: true, ownPID: own))
+        #expect(MonitorTerminationPolicy.canTerminate(pid: 501, bundlePath: "/System/Applications/Notes.app",
+                                                      bundleIdentifier: "com.apple.Notes", isRegularApp: true, ownPID: own))
+        #expect(MonitorTerminationPolicy.canTerminate(pid: 502, bundlePath: "/Users/x/Applications/Foo.app",
+                                                      bundleIdentifier: nil, isRegularApp: true, ownPID: own))
+    }
+
+    @Test func systemAndBackgroundProcessesAreProtected() {
+        // Finder e afins: caminho de sistema e/ou identificador protegido.
+        #expect(!MonitorTerminationPolicy.canTerminate(pid: 400, bundlePath: "/System/Library/CoreServices/Finder.app",
+                                                       bundleIdentifier: "com.apple.finder", isRegularApp: true, ownPID: own))
+        #expect(!MonitorTerminationPolicy.canTerminate(pid: 401, bundlePath: "/Applications/Fake.app",
+                                                       bundleIdentifier: "com.apple.dock", isRegularApp: true, ownPID: own))
+        // Agentes sem janela, processos sem pacote, o próprio app, launchd.
+        #expect(!MonitorTerminationPolicy.canTerminate(pid: 402, bundlePath: "/Applications/Agent.app",
+                                                       bundleIdentifier: nil, isRegularApp: false, ownPID: own))
+        #expect(!MonitorTerminationPolicy.canTerminate(pid: 403, bundlePath: nil, bundleIdentifier: nil, isRegularApp: true, ownPID: own))
+        #expect(!MonitorTerminationPolicy.canTerminate(pid: 404, bundlePath: "/usr/libexec/thing", bundleIdentifier: nil,
+                                                       isRegularApp: true, ownPID: own))
+        #expect(!MonitorTerminationPolicy.canTerminate(pid: own, bundlePath: "/Applications/CleanerCRTV.app",
+                                                       bundleIdentifier: nil, isRegularApp: true, ownPID: own))
+        #expect(!MonitorTerminationPolicy.canTerminate(pid: 1, bundlePath: "/Applications/X.app", bundleIdentifier: nil,
+                                                       isRegularApp: true, ownPID: own))
+    }
+
+    @Test func systemBundles() {
+        #expect(MonitorTerminationPolicy.isSystemBundle("/System/Library/CoreServices/Dock.app"))
+        #expect(!MonitorTerminationPolicy.isSystemBundle("/Applications/Safari.app"))
     }
 }
