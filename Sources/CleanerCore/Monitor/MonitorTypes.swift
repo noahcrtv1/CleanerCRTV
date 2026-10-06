@@ -132,12 +132,17 @@ public struct MonitorMemory: Sendable, Equatable {
         let appPages = internalPages > purgeable ? internalPages - purgeable : 0
         let cachedPages = UInt64(vm.external_page_count) + purgeable
 
+        // Multiplicação saturada: um tamanho de página absurdo não pode derrubar o app.
+        func bytes(_ pages: UInt64) -> UInt64 {
+            let product = pages.multipliedReportingOverflow(by: page)
+            return product.overflow ? .max : product.partialValue
+        }
         let cap = physical
-        let app = min(appPages.multipliedReportingOverflow(by: page).partialValue, cap)
-        let wired = min(UInt64(vm.wire_count) * page, cap - app)
-        let compressed = min(UInt64(vm.compressor_page_count) * page, cap - app - wired)
+        let app = min(bytes(appPages), cap)
+        let wired = min(bytes(UInt64(vm.wire_count)), cap - app)
+        let compressed = min(bytes(UInt64(vm.compressor_page_count)), cap - app - wired)
         let used = app + wired + compressed
-        let cached = min(cachedPages * page, cap - used)
+        let cached = min(bytes(cachedPages), cap - used)
         let free = cap - used - cached
 
         self.init(total: Int64(clamping: physical), app: Int64(clamping: app), wired: Int64(clamping: wired),

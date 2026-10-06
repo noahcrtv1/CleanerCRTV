@@ -105,11 +105,21 @@ final class MonitorModel {
     @ObservationIgnored private var readRing = MonitorRingBuffer<Double>(capacity: MonitorModel.historyLength)
     @ObservationIgnored private var writeRing = MonitorRingBuffer<Double>(capacity: MonitorModel.historyLength)
 
+    @ObservationIgnored private var defaultsObserver: NSObjectProtocol?
+
     init() {
-        // O rótulo da barra de menus atualiza desde a abertura, mesmo antes de a view aparecer.
-        if UserDefaults.standard.object(forKey: "showMenuBar") as? Bool ?? true {
-            setActive(true, for: .menuBar)
+        // O rótulo da barra de menus atualiza desde a abertura, mesmo antes de a view aparecer, e segue
+        // o ajuste "showMenuBar" (o onAppear/onDisappear do rótulo de um MenuBarExtra não é confiável).
+        syncMenuBarClient()
+        defaultsObserver = NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification,
+                                                                  object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.syncMenuBarClient() }
         }
+    }
+
+    private func syncMenuBarClient() {
+        let show = UserDefaults.standard.object(forKey: "showMenuBar") as? Bool ?? true
+        if show != clients.contains(.menuBar) { setActive(show, for: .menuBar) }
     }
 
     // MARK: - Ciclo de vida
@@ -206,8 +216,12 @@ final class MonitorModel {
 
         appRows = apps.map { group in
             // O processo que o macOS trata como "o app" (com Dock), não um ajudante.
+            // Prefere o próprio pacote do grupo: um app embutido (ex.: Simulator dentro do Xcode) não
+            // deve virar o alvo de "Encerrar" quando o app de fora está aberto.
             let candidates = group.pids.compactMap { running[$0] }
-            let app = candidates.first { $0.activationPolicy == .regular } ?? running[group.mainPID] ?? candidates.first
+            let regular = candidates.filter { $0.activationPolicy == .regular }
+            let app = regular.first { $0.bundleURL?.path == group.bundlePath } ?? regular.first
+                ?? running[group.mainPID] ?? candidates.first
             return MonitorProcessRow(id: .app(group.bundlePath), name: app?.localizedName ?? group.name,
                                      pid: app?.processIdentifier ?? group.mainPID, processCount: group.pids.count,
                                      cpu: group.cpu, memory: group.memory,

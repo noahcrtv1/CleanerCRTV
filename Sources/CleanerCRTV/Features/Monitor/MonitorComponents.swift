@@ -61,7 +61,8 @@ final class MonitorVisibilityView: NSView {
     }
 
     private func reportCurrent() {
-        report(window?.occlusionState.contains(.visible) ?? false)
+        guard let window else { return report(false) }
+        report(window.isVisible && window.occlusionState.contains(.visible))
     }
 
     private func report(_ visible: Bool) {

@@ -105,6 +105,15 @@ struct MonitorMemoryTests {
         #expect(memory.usedFraction == 1)
     }
 
+    @Test func absurdPageSizeSaturatesInsteadOfCrashing() {
+        let memory = MonitorMemory(vm: vm(internal: 10, purgeable: 0, wired: 10, compressor: 10, external: 10),
+                                   pageSize: .max / 2, physical: physical)
+        #expect(memory.total == Int64(physical))
+        #expect(memory.app == Int64(physical))
+        #expect(memory.used == memory.total)
+        #expect(memory.free == 0)
+    }
+
     @Test(arguments: [(0, MonitorMemoryPressure.normal), (1, .normal), (2, .warning), (4, .critical), (7, .critical)])
     func pressureLevels(level: Int, expected: MonitorMemoryPressure) {
         #expect(MonitorMemoryPressure(level: level) == expected)
@@ -170,6 +179,11 @@ struct MonitorRateTests {
         #expect(MonitorFormat.percent(-0.2) == "0%")
         #expect(MonitorFormat.percent(0.1234, decimals: 1, separator: ",") == "12,3%")
         #expect(MonitorFormat.percent(2.5, decimals: 1, separator: ",") == "250,0%")
+        // Valores fora de qualquer realidade não podem estourar a conversão para Int.
+        #expect(!MonitorFormat.percent(1e300, decimals: 1, separator: ",").isEmpty)
+        #expect(!MonitorFormat.percent(.greatestFiniteMagnitude).isEmpty)
+        #expect(!MonitorFormat.rate(.greatestFiniteMagnitude, separator: ",").isEmpty)
+        #expect(!MonitorFormat.uptime(.greatestFiniteMagnitude).isEmpty)
     }
 
     @Test func memoryText() {
@@ -319,16 +333,16 @@ struct MonitorSamplerTests {
         let second = await sampler.sample(detailed: true)
         let cpu = try #require(second.cpu)
         #expect((0...1).contains(cpu.total))
-        #expect(cpu.perCore.count == ProcessInfo.processInfo.activeProcessorCount)
+        #expect(cpu.perCore.count == ProcessInfo.processInfo.processorCount)
         #expect(cpu.perCore.allSatisfy { (0...1).contains($0) })
         #expect(second.processCPUValid)
         #expect((second.network?.inPerSecond ?? 0) >= 0)
         #expect((second.disk?.readPerSecond ?? 0) >= 0)
 
-        // Logo em seguida é cedo demais: não inventa taxa.
+        // Sem modo detalhado não há processos.
         let third = await sampler.sample(detailed: false)
-        #expect(third.cpu == nil)
         #expect(third.processes == nil)
+        #expect(third.apps == nil)
     }
 
     @Test func systemInfoIsFilled() {

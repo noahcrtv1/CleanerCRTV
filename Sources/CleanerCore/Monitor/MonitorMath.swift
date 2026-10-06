@@ -181,7 +181,8 @@ public enum MonitorFormat {
 
     /// "12%". `decimals: 1` → "12,3%" (coluna de processos).
     public static func percent(_ fraction: Double, decimals: Int = 0, separator: String = decimalSeparator) -> String {
-        let value = fraction.isFinite ? Swift.max(0, fraction) * 100 : 0
+        // Teto bem acima de qualquer valor real (CPU de processo passa de 100%), só para o Int não estourar.
+        let value = fraction.isFinite ? Swift.min(Swift.max(0, fraction), 1e9) * 100 : 0
         guard decimals > 0 else { return "\(Int(value.rounded()))%" }
         let tenths = Int((value * 10).rounded())
         return "\(tenths / 10)\(separator)\(tenths % 10)%"
@@ -204,7 +205,7 @@ public enum MonitorFormat {
 
     /// "3 d 4 h", "5 h 12 min", "7 min".
     public static func uptime(_ seconds: TimeInterval) -> String {
-        let minutes = Int(Swift.max(0, seconds.isFinite ? seconds : 0)) / 60
+        let minutes = Int(Swift.min(Swift.max(0, seconds.isFinite ? seconds : 0), 1e12)) / 60
         let days = minutes / 1440, hours = minutes % 1440 / 60, rest = minutes % 60
         if days > 0 { return "\(days) d \(hours) h" }
         if hours > 0 { return "\(hours) h \(rest) min" }
@@ -221,12 +222,12 @@ public enum MonitorFormat {
 
     /// Uma casa decimal abaixo de 10; inteiro a partir daí.
     private static func number(_ value: Double, separator: String) -> String {
-        if value < 0.05 { return "0" }
+        if !(value >= 0.05) { return "0" }
         if value < 9.95 {
             let tenths = Int((value * 10).rounded())
             return "\(tenths / 10)\(separator)\(tenths % 10)"
         }
-        return "\(Int(value.rounded()))"
+        return "\(Int(Swift.min(value, 1e15).rounded()))"
     }
 }
 

@@ -29,8 +29,9 @@ struct MenuBarLabel: View {
         let monitor = model.monitor
         content(monitor)
             .monospacedDigit()
+            // Desligar fica a cargo do ajuste "showMenuBar" (ver MonitorModel.init): um onDisappear
+            // espúrio do rótulo congelaria a barra de menus.
             .onAppear { monitor.setActive(true, for: .menuBar) }
-            .onDisappear { monitor.setActive(false, for: .menuBar) }
     }
 
     @ViewBuilder private func content(_ monitor: MonitorModel) -> some View {
