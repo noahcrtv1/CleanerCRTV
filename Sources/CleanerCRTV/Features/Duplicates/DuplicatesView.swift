@@ -28,6 +28,7 @@ struct DuplicatesView: View {
                 .transition(.opacity)
         }
         .animation(Motion.standard(reduceMotion), value: stage)
+        .onAppear { duplicates.refreshRootStatus() }
     }
 
     // MARK: - Cabeçalho
@@ -66,13 +67,26 @@ struct DuplicatesView: View {
                      title: "Encontre arquivos repetidos", message: heroMessage, action: startScan)
                 .disabled(duplicates.roots.isEmpty)
         case .empty:
-            ContentUnavailableView {
-                Label("Nenhum duplicado", systemImage: "checkmark.seal")
-            } description: {
-                Text("Nenhum arquivo de \((duplicates.stats?.minSize ?? duplicates.minSize).label) ou mais aparece repetido nas pastas escolhidas. Tudo em ordem!"
-                     + (skippedNote.map { "\n" + $0 } ?? ""))
-            } actions: {
-                Button("Escanear de novo", action: startScan)
+            if duplicates.stats?.rootsScanned == 0 {
+                ContentUnavailableView {
+                    Label("Nenhuma pasta para procurar", systemImage: "folder.badge.questionmark")
+                } description: {
+                    Text(duplicates.roots.isEmpty
+                         ? "Adicione uma pasta acima para começar a busca."
+                         : "As pastas escolhidas não foram encontradas. Se estão num disco externo, conecte-o e escaneie de novo.")
+                } actions: {
+                    Button("Escanear de novo", action: startScan)
+                        .disabled(duplicates.roots.isEmpty)
+                }
+            } else {
+                ContentUnavailableView {
+                    Label("Nenhum duplicado", systemImage: "checkmark.seal")
+                } description: {
+                    Text("Nenhum arquivo de \((duplicates.stats?.minSize ?? duplicates.minSize).label) ou mais aparece repetido nas pastas escolhidas. Tudo em ordem!"
+                         + skippedNotes.map { "\n" + $0 }.joined())
+                } actions: {
+                    Button("Escanear de novo", action: startScan)
+                }
             }
         case .results:
             DuplicateResultsView(onRemove: removeSelected)
@@ -100,9 +114,16 @@ struct DuplicatesView: View {
         }
     }
 
-    private var skippedNote: String? {
-        guard let stats = duplicates.stats, stats.skippedCloud > 0 else { return nil }
-        return "\(stats.skippedCloud) \(stats.skippedCloud == 1 ? "item do iCloud não baixado ficou" : "itens do iCloud não baixados ficaram") de fora."
+    private var skippedNotes: [String] {
+        guard let stats = duplicates.stats else { return [] }
+        var notes: [String] = []
+        if stats.skippedCloud > 0 {
+            notes.append("\(stats.skippedCloud) \(stats.skippedCloud == 1 ? "item do iCloud não baixado ficou" : "itens do iCloud não baixados ficaram") de fora.")
+        }
+        if stats.unreadableFolders > 0 {
+            notes.append("\(stats.unreadableFolders) \(stats.unreadableFolders == 1 ? "pasta não pôde ser lida" : "pastas não puderam ser lidas") (sem permissão do macOS).")
+        }
+        return notes
     }
 
     // MARK: - Ações
@@ -193,7 +214,9 @@ struct DuplicateOptionsBar: View {
                 GlassEffectContainer(spacing: 6) {
                     HStack(spacing: 6) {
                         ForEach(duplicates.roots, id: \.self) { root in
-                            DuplicateRootChip(url: root) { duplicates.removeRoot(root) }
+                            DuplicateRootChip(url: root, available: !duplicates.unavailableRoots.contains(root)) {
+                                duplicates.removeRoot(root)
+                            }
                         }
                         if duplicates.roots.isEmpty {
                             Text("Nenhuma pasta")
@@ -235,15 +258,24 @@ struct DuplicateOptionsBar: View {
 /// Ficha de uma pasta da busca.
 struct DuplicateRootChip: View {
     let url: URL
+    let available: Bool
     let onRemove: () -> Void
 
     var body: some View {
         let name = DuplicateRoots.displayName(url)
         HStack(spacing: 6) {
-            FileIcon(url: url, size: 16)
+            if available {
+                FileIcon(url: url, size: 16)
+            } else {
+                Image(systemName: "externaldrive.badge.xmark")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 16, height: 16)
+            }
             Text(name)
                 .font(.callout)
                 .lineLimit(1)
+                .foregroundStyle(available ? .primary : .secondary)
             Button(action: onRemove) {
                 Image(systemName: "xmark")
                     .font(.system(size: 8, weight: .bold))
@@ -259,9 +291,11 @@ struct DuplicateRootChip: View {
         .padding(.trailing, 5)
         .padding(.vertical, 4)
         .glassEffect(.regular, in: .capsule)
-        .help(duplicateTildePath(url.path))
+        .help(available ? duplicateTildePath(url.path)
+                        : "\(duplicateTildePath(url.path)) não foi encontrada (o disco pode estar desconectado) e fica fora da busca")
         .contextMenu {
             Button("Mostrar no Finder") { Reveal.inFinder(url) }
+                .disabled(!available)
             Button("Tirar da busca", action: onRemove)
         }
     }
@@ -290,7 +324,7 @@ struct DuplicateAutoSelectMenu: View {
                 }
             }
             Divider()
-            Button("Desmarcar tudo") { duplicates.deselectAll() }
+            Button(duplicates.isFiltered ? "Desmarcar os visíveis" : "Desmarcar tudo") { duplicates.deselectAll() }
                 .disabled(duplicates.selectedCount == 0)
         } label: {
             Label("Selecionar automaticamente", systemImage: "checklist")

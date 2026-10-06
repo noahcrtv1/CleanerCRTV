@@ -95,7 +95,21 @@ public enum DuplicateScanner {
         guard !Task.isCancelled else { return nil }
         progress.update { $0 = DuplicateProgressSnapshot() }
 
-        guard let collection = collect(options, progress: progress, isCancelled: { Task.isCancelled }) else { return nil }
+        // E/S bloqueante fica fora do pool cooperativo (as outras varreduras do Painel dividem esse pool).
+        let stop = DuplicateStopFlag()
+        return await withTaskCancellationHandler {
+            await run(options, progress: progress, stop: stop, started: started)
+        } onCancel: {
+            stop.raise()
+        }
+    }
+
+    static func run(_ options: DuplicateScanOptions, progress: DuplicateProgress, stop: DuplicateStopFlag,
+                    started: Date) async -> DuplicateScanResult? {
+        let collected = await DuplicateBlockingIO.run {
+            collect(options, progress: progress, isCancelled: stop.isRaised)
+        }
+        guard let collection = collected, !stop.isRaised() else { return nil }
         var skippedCloud = collection.skippedCloud
         var skippedUnreadable = 0
 
@@ -112,8 +126,8 @@ public enum DuplicateScanner {
         }
 
         // 2. Início + fim.
-        let edgeOutcomes = await hashAll(edgeItems, full: false, progress: progress)
-        if Task.isCancelled { return nil }
+        let edgeOutcomes = await hashAll(edgeItems, full: false, progress: progress, stop: stop)
+        if stop.isRaised() { return nil }
         var byEdges: [DuplicateDigestKey: [DuplicateCandidate]] = [:]
         for (item, outcome) in zip(edgeItems, edgeOutcomes) {
             switch outcome {
@@ -143,8 +157,8 @@ public enum DuplicateScanner {
             $0.bytesHashed = 0
             $0.bytesToHash = fullBytes
         }
-        let fullOutcomes = await hashAll(fullItems, full: true, progress: progress)
-        if Task.isCancelled { return nil }
+        let fullOutcomes = await hashAll(fullItems, full: true, progress: progress, stop: stop)
+        if stop.isRaised() { return nil }
         var byContent: [DuplicateDigestKey: [DuplicateCandidate]] = [:]
         for (item, outcome) in zip(fullItems, fullOutcomes) {
             switch outcome {
@@ -160,12 +174,18 @@ public enum DuplicateScanner {
             $0.phase = .finishing
             $0.currentPath = nil
         }
-        var groups: [DuplicateGroup] = []
-        groups.reserveCapacity(confirmed.count)
-        for (key, items) in confirmed {
-            if Task.isCancelled { return nil }
-            if let group = makeGroup(key: key, items: items, options: options) { groups.append(group) }
+        // SafetyGuard (realpath) e getattrlist por arquivo: também é E/S.
+        let toAssemble = confirmed
+        let assembled = await DuplicateBlockingIO.run { () -> [DuplicateGroup]? in
+            var groups: [DuplicateGroup] = []
+            groups.reserveCapacity(toAssemble.count)
+            for (key, items) in toAssemble {
+                if stop.isRaised() { return nil }
+                if let group = makeGroup(key: key, items: items, options: options) { groups.append(group) }
+            }
+            return groups
         }
+        guard var groups = assembled, !stop.isRaised() else { return nil }
         groups.sort { a, b in
             if a.reclaimable != b.reclaimable { return a.reclaimable > b.reclaimable }
             if a.wasted != b.wasted { return a.wasted > b.wasted }
@@ -173,14 +193,20 @@ public enum DuplicateScanner {
         }
         return DuplicateScanResult(groups: groups, filesConsidered: collection.candidates.count,
                                    skippedCloud: skippedCloud, skippedUnreadable: skippedUnreadable,
+                                   unreadableFolders: collection.unreadableFolders,
+                                   rootsScanned: collection.rootsScanned,
                                    duration: Date().timeIntervalSince(started))
     }
 
     // MARK: - Coleta
 
-    struct Collection {
+    struct Collection: Sendable {
         var candidates: [DuplicateCandidate] = []
         var skippedCloud = 0
+        /// Pastas que não deu para listar (sem permissão do macOS, por exemplo).
+        var unreadableFolders = 0
+        /// Pontos de partida que existiam e foram percorridos.
+        var rootsScanned = 0
     }
 
     /// Percorre as pastas com `fts` (sem seguir links, sem trocar de volume) e junta os arquivos comuns
@@ -204,6 +230,7 @@ public enum DuplicateScanner {
                 guard options.isRootAllowed(root), !Exclusions.isExcluded(path: rootPath, in: excluded),
                       !skipPaths.contains(where: { rootPath == $0 || rootPath.hasPrefix($0 + "/") })
                 else { continue }
+                collection.rootsScanned += 1
 
                 rootPath.withCString { cPath in
                     guard let dup = strdup(cPath) else { return }
@@ -254,8 +281,10 @@ public enum DuplicateScanner {
                                 path: path, size: size, device: st.st_dev, inode: st.st_ino,
                                 linkCount: Int(st.st_nlink), allocated: Int64(st.st_blocks) * 512,
                                 modified: date(st.st_mtimespec), created: date(st.st_birthtimespec)))
+                        case FTS_DNR, FTS_ERR:
+                            collection.unreadableFolders += 1
                         default:
-                            // Links simbólicos, pastas ilegíveis, ciclos: nada a fazer.
+                            // Links simbólicos, ciclos: nada a fazer.
                             continue
                         }
                     }
@@ -274,7 +303,8 @@ public enum DuplicateScanner {
     static func shouldSkipDirectory(path: String, flags: UInt32, skipPaths: Set<String>, excluded: [String]) -> Bool {
         let name = lastComponent(path)
         if name.hasPrefix(".") || flags & UInt32(UF_HIDDEN) != 0 { return true }
-        if name == "node_modules" { return true }
+        // Backups.backupdb: cópias do Time Machine (HFS+) são duplicados de propósito.
+        if name == "node_modules" || name == "Backups.backupdb" { return true }
         if skipPaths.contains(path) { return true }
         if !excluded.isEmpty, Exclusions.isExcluded(path: path, in: excluded) { return true }
         // Pacotes (apps, bibliotecas de Fotos/Música, projetos) são opacos: nunca abertos nem comparados.
@@ -297,21 +327,22 @@ public enum DuplicateScanner {
     }
 
     /// Até `ioConcurrency` arquivos de cada vez. nil na posição = cancelado antes de ler.
-    static func hashAll(_ items: [DuplicateCandidate], full: Bool, progress: DuplicateProgress) async -> [HashOutcome?] {
+    static func hashAll(_ items: [DuplicateCandidate], full: Bool, progress: DuplicateProgress,
+                        stop: DuplicateStopFlag) async -> [HashOutcome?] {
         guard !items.isEmpty else { return [] }
         var results = [HashOutcome?](repeating: nil, count: items.count)
         await withTaskGroup(of: (Int, HashOutcome?).self) { group in
             var next = 0
             while next < min(ioConcurrency, items.count) {
                 let index = next
-                group.addTask { (index, hashOne(items[index], full: full, progress: progress)) }
+                group.addTask { (index, await hashOne(items[index], full: full, progress: progress, stop: stop)) }
                 next += 1
             }
             while let (index, outcome) = await group.next() {
                 results[index] = outcome
-                if next < items.count, !Task.isCancelled {
+                if next < items.count, !stop.isRaised() {
                     let index = next
-                    group.addTask { (index, hashOne(items[index], full: full, progress: progress)) }
+                    group.addTask { (index, await hashOne(items[index], full: full, progress: progress, stop: stop)) }
                     next += 1
                 }
             }
@@ -319,18 +350,21 @@ public enum DuplicateScanner {
         return results
     }
 
-    static func hashOne(_ item: DuplicateCandidate, full: Bool, progress: DuplicateProgress) -> HashOutcome? {
-        if Task.isCancelled { return nil }
-        let outcome = DuplicateIOPolicy.withoutMaterializing {
-            digest(of: item, full: full, isCancelled: { Task.isCancelled }) { bytes in
-                progress.update { $0.bytesHashed += Int64(bytes) }
+    static func hashOne(_ item: DuplicateCandidate, full: Bool, progress: DuplicateProgress,
+                        stop: DuplicateStopFlag) async -> HashOutcome? {
+        if stop.isRaised() { return nil }
+        let outcome = await DuplicateBlockingIO.run {
+            DuplicateIOPolicy.withoutMaterializing {
+                digest(of: item, full: full, isCancelled: stop.isRaised) { bytes in
+                    progress.update { $0.bytesHashed += Int64(bytes) }
+                }
             }
         }
         progress.update {
             $0.hashed += 1
             $0.currentPath = item.path
         }
-        return Task.isCancelled ? nil : outcome
+        return stop.isRaised() ? nil : outcome
     }
 
     /// SHA-256 do início + fim (`full == false`) ou do conteúdo inteiro, em blocos de 1 MB.
@@ -447,6 +481,26 @@ struct DuplicateDigestKey: Hashable, Sendable {
 
 enum DuplicateReadStatus: Equatable {
     case ok, cloud, failed, cancelled
+}
+
+/// Cancelamento visível para o código que roda fora de uma Task (fila de E/S).
+final class DuplicateStopFlag: Sendable {
+    private let state = OSAllocatedUnfairLock(initialState: false)
+
+    func raise() { state.withLock { $0 = true } }
+    @Sendable func isRaised() -> Bool { state.withLock { $0 } }
+}
+
+/// Leituras bloqueantes numa fila própria: não prendem as threads do pool cooperativo do Swift.
+/// A concorrência é limitada por quem chama (`ioConcurrency`).
+enum DuplicateBlockingIO {
+    static let queue = DispatchQueue(label: "cleanercrtv.duplicates.io", qos: .userInitiated, attributes: .concurrent)
+
+    static func run<T: Sendable>(_ body: @escaping @Sendable () -> T) async -> T {
+        await withCheckedContinuation { continuation in
+            queue.async { continuation.resume(returning: body()) }
+        }
+    }
 }
 
 /// Política de E/S da thread atual: ler um arquivo "sem dados" do iCloud falha em vez de baixá-lo.

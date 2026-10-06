@@ -50,8 +50,8 @@ struct DuplicateResultsView: View {
                 .foregroundStyle(Feature.duplicates.tint)
             Text("\(groups) \(groups == 1 ? "grupo" : "grupos") · \(duplicates.totalReclaimable.formattedBytes) em cópias extras")
                 .monospacedDigit()
-            if let stats = duplicates.stats, stats.skippedCloud + stats.skippedUnreadable > 0 {
-                Image(systemName: "icloud.slash")
+            if let stats = duplicates.stats, stats.skippedCloud + stats.skippedUnreadable + stats.unreadableFolders > 0 {
+                Image(systemName: stats.skippedCloud > 0 ? "icloud.slash" : "exclamationmark.triangle")
                     .foregroundStyle(.tertiary)
                     .help(skippedHelp(stats))
                     .accessibilityLabel(skippedHelp(stats))
@@ -65,6 +65,9 @@ struct DuplicateResultsView: View {
         var parts: [String] = []
         if stats.skippedCloud > 0 { parts.append("\(stats.skippedCloud) no iCloud sem baixar (não foram lidos)") }
         if stats.skippedUnreadable > 0 { parts.append("\(stats.skippedUnreadable) sem permissão de leitura ou alterados durante a busca") }
+        if stats.unreadableFolders > 0 {
+            parts.append("\(stats.unreadableFolders) \(stats.unreadableFolders == 1 ? "pasta que o macOS não deixou abrir" : "pastas que o macOS não deixou abrir")")
+        }
         return "Ficaram de fora: " + parts.joined(separator: "; ")
     }
 }
@@ -399,8 +402,10 @@ struct DuplicateCopyRow: View {
             Divider()
             Button("Manter só esta", action: onKeepOnly)
             Button("Preferir “\(folderName)” em todos os grupos", action: onPreferFolder)
-            Divider()
-            Button("Ignorar sempre “\(folderName)”", action: onIgnoreFolder)
+            if DuplicateRoots.canBeIgnored(file.folder) {
+                Divider()
+                Button("Ignorar sempre “\(folderName)”", action: onIgnoreFolder)
+            }
         }
     }
 

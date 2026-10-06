@@ -11,10 +11,14 @@ public enum DuplicateRoots {
         standardFolderNames.map { Paths.home($0) }.filter(isDirectory)
     }
 
+    /// Pastas que sumiram (disco externo desconectado) continuam na lista; a busca só as pula.
     public static func load(from store: UserDefaults = .standard) -> [URL] {
         guard let saved = store.stringArray(forKey: defaultsKey) else { return defaults }
-        return saved.map { URL(fileURLWithPath: $0, isDirectory: true) }.filter(isDirectory)
+        return saved.map { URL(fileURLWithPath: $0, isDirectory: true) }
     }
+
+    /// A pasta existe agora (um disco externo pode estar desconectado)?
+    public static func isAvailable(_ url: URL) -> Bool { isDirectory(url) }
 
     public static func save(_ roots: [URL], to store: UserDefaults = .standard) {
         store.set(roots.map { $0.standardizedFileURL.path }, forKey: defaultsKey)
@@ -25,6 +29,10 @@ public enum DuplicateRoots {
         guard isDirectory(url) else { return "Escolha uma pasta." }
         let path = canonical(url)
         let home = SafetyGuard.canonicalHome
+        let cloud = [home + "/Library/Mobile Documents", home + "/Library/CloudStorage"]
+        if cloud.contains(where: { path == $0 || path.hasPrefix($0 + "/") }) {
+            return "Pastas de nuvem (iCloud Drive, Dropbox…) ficam fora da busca: ler os arquivos faria o Mac baixá-los."
+        }
         if path == home + "/Library" || path.hasPrefix(home + "/Library/") {
             return "A Biblioteca guarda dados de apps e fica fora da busca de duplicados."
         }
@@ -45,7 +53,23 @@ public enum DuplicateRoots {
         guard inHome || inShared || onExternal else {
             return "Escolha uma pasta da sua pasta pessoal ou de um disco externo."
         }
+        // Um compartilhamento de rede pode ser o próprio Mac: o mesmo arquivo apareceria duas vezes como
+        // "cópia" e remover uma apagaria a única que existe.
+        let volume = try? URL(fileURLWithPath: path, isDirectory: true)
+            .resourceValues(forKeys: [.volumeIsLocalKey, .volumeIsReadOnlyKey])
+        if volume?.volumeIsLocal == false { return "Pastas de rede ficam fora da busca de duplicados." }
+        if volume?.volumeIsReadOnly == true { return "Este disco é somente leitura: nada poderia ser removido dele." }
         return nil
+    }
+
+    /// "Ignorar sempre" só para pastas comuns: nunca a pasta pessoal, as pastas-padrão dela (Documentos,
+    /// Downloads…), a raiz de um disco ou /Users/Shared — a exclusão vale para todas as varreduras do app
+    /// e sai de um clique no menu, sem confirmação.
+    public static func canBeIgnored(_ folder: URL) -> Bool {
+        let path = canonical(folder)
+        let home = SafetyGuard.canonicalHome
+        if path == home || SafetyGuard.homeStandardFolders.contains(where: { path == home + "/" + $0 }) { return false }
+        return path.split(separator: "/").count > 2
     }
 
     /// Junta uma pasta à lista, mantendo a ordem: recusa a inválida ou já coberta por outra
@@ -86,7 +110,9 @@ public enum DuplicateRoots {
     static let opaqueExtensions: Set<String> = [
         "photoslibrary", "photolibrary", "migratedphotolibrary", "aplibrary", "musiclibrary", "tvlibrary",
         "imovielibrary", "theater", "fcpbundle", "logicx", "band", "lrdata", "lrlibrary", "cocatalog",
-        "app", "framework", "bundle", "plugin", "kext", "xcodeproj", "xcworkspace", "xcassets",
+        "app", "framework", "bundle", "plugin", "kext", "xcodeproj", "xcworkspace", "xcassets", "xcarchive",
+        // Imagens de disco em bandas e máquinas virtuais: bandas iguais (zeradas) não são cópias descartáveis.
+        "sparsebundle", "pvm", "pvmp", "vmwarevm", "utm",
     ]
 
     /// Pastas de mídia gerenciadas por apps: tirar um arquivo de lá deixa a biblioteca do app com buracos.

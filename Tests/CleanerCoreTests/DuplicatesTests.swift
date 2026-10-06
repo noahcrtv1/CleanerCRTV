@@ -122,6 +122,7 @@ struct DuplicateScannerTests {
         try box.write("node_modules/pkg/copia.bin", data)
         try box.write("Fotos.photoslibrary/originals/copia.bin", data)
         try box.write("Coisa.app/Contents/copia.bin", data)
+        try box.write("Backups.backupdb/Mac/2026-01-01/copia.bin", data)
         try FileManager.default.createSymbolicLink(at: box.path("atalho.bin"), withDestinationURL: box.path("visivel.bin"))
         let result = try #require(await DuplicateScanner.scan(box.options()))
         #expect(result.groups.isEmpty)
@@ -189,6 +190,65 @@ struct DuplicateScannerTests {
         let found = try #require(await DuplicateScanner.scan(real))
         #expect(found.groups.count == 1)
         #expect(found.groups[0].files.allSatisfy { SafetyGuard.check($0.url).isAllowed })
+    }
+
+    @Test func countsUnreadableFoldersAndScannedRoots() async throws {
+        let box = try DuplicateSandbox()
+        defer { box.cleanUp() }
+        let data = randomData(120_000)
+        try box.write("a.bin", data)
+        try box.write("b.bin", data)
+        let locked = box.path("trancada")
+        try box.write("trancada/c.bin", data)
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: locked.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: locked.path) }
+
+        let result = try #require(await DuplicateScanner.scan(box.options()))
+        #expect(result.groups.count == 1)
+        #expect(result.groups[0].files.count == 2)
+        #expect(result.unreadableFolders == 1)
+        #expect(result.rootsScanned == 1)
+
+        // Nenhuma pasta disponível: a busca termina vazia e diz que nada foi percorrido.
+        var none = box.options()
+        none.isRootAllowed = { _ in false }
+        let empty = try #require(await DuplicateScanner.scan(none))
+        #expect(empty.rootsScanned == 0)
+        #expect(empty.groups.isEmpty)
+    }
+
+    @Test func skipsDiskImageBandsAndVirtualMachines() async throws {
+        let box = try DuplicateSandbox()
+        defer { box.cleanUp() }
+        // Bandas zeradas de uma imagem de disco são iguais, mas apagar uma corrompe a imagem.
+        let zeros = Data(count: 200_000)
+        try box.write("Disco.sparsebundle/bands/0", zeros)
+        try box.write("Disco.sparsebundle/bands/1", zeros)
+        try box.write("Windows.pvm/disco.hds", zeros)
+        try box.write("Linux.utm/Data/disco.qcow2", zeros)
+        let result = try #require(await DuplicateScanner.scan(box.options()))
+        #expect(result.groups.isEmpty)
+        #expect(result.filesConsidered == 0)
+    }
+
+    @Test func raisedStopFlagStopsHashing() async throws {
+        let box = try DuplicateSandbox()
+        defer { box.cleanUp() }
+        let data = randomData(300_000)
+        try box.write("a", data)
+        try box.write("b", data)
+        let collection = try #require(DuplicateScanner.collect(box.options(), progress: DuplicateProgress(),
+                                                               isCancelled: { false }))
+        #expect(collection.candidates.count == 2)
+        let stop = DuplicateStopFlag()
+        stop.raise()
+        let outcomes = await DuplicateScanner.hashAll(collection.candidates, full: true,
+                                                     progress: DuplicateProgress(), stop: stop)
+        #expect(outcomes.count == 2)
+        #expect(outcomes.compactMap { $0 }.isEmpty)
+        // A leitura em si também para no meio.
+        let read = DuplicateScanner.digest(of: collection.candidates[0], full: true, isCancelled: { true }) { _ in }
+        if case .digest = read { Issue.record("leitura cancelada não deveria produzir hash") }
     }
 
     @Test func cancelledScanReturnsNil() async throws {
@@ -404,6 +464,14 @@ struct DuplicateRootsTests {
         DuplicateRoots.save([], to: store)
         #expect(DuplicateRoots.load(from: store).isEmpty)
 
+        // Disco desconectado: a pasta continua salva (a busca só a pula).
+        let missing = box.path("disco-desconectado")
+        DuplicateRoots.save([missing, box.url], to: store)
+        let loaded = DuplicateRoots.load(from: store)
+        #expect(loaded.count == 2)
+        #expect(!DuplicateRoots.isAvailable(loaded[0]))
+        #expect(DuplicateRoots.isAvailable(loaded[1]))
+
         #expect(DuplicateMinSize.load(from: store) == .mb1)
         DuplicateMinSize.mb100.save(to: store)
         #expect(DuplicateMinSize.load(from: store) == .mb100)
@@ -459,6 +527,29 @@ struct DuplicateRootsTests {
         #expect(DuplicateRoots.adding(inner, to: step.roots).problem != nil)
         // Biblioteca recusada.
         #expect(DuplicateRoots.adding(Paths.library("Caches"), to: []).problem != nil)
+    }
+
+    @Test func ignoringNeverCoversHomeOrVolumeRoots() {
+        #expect(!DuplicateRoots.canBeIgnored(Paths.home))
+        #expect(!DuplicateRoots.canBeIgnored(URL(fileURLWithPath: "/")))
+        #expect(!DuplicateRoots.canBeIgnored(URL(fileURLWithPath: "/Users/Shared")))
+        #expect(!DuplicateRoots.canBeIgnored(URL(fileURLWithPath: "/Volumes/Externo")))
+        #expect(!DuplicateRoots.canBeIgnored(Paths.home("Documents")))
+        #expect(!DuplicateRoots.canBeIgnored(Paths.home("Downloads")))
+        #expect(DuplicateRoots.canBeIgnored(Paths.home("Downloads/Fotos antigas")))
+        #expect(DuplicateRoots.canBeIgnored(URL(fileURLWithPath: "/Volumes/Externo/Backup")))
+    }
+
+    @Test func missingRootIsSkippedByScan() async throws {
+        let box = try DuplicateSandbox(underHome: true)
+        defer { box.cleanUp() }
+        let data = Data(repeating: 7, count: 120_000)
+        try box.write("a/um.bin", data)
+        try box.write("a/dois.bin", data)
+        var options = DuplicateScanOptions(roots: [box.path("nao-existe"), box.path("a")], minSize: 100_000)
+        options.excludedPaths = []
+        let result = try #require(await DuplicateScanner.scan(options))
+        #expect(result.groups.count == 1)
     }
 
     @Test func groupKindAndPreviewIgnoreMissingExtensions() {

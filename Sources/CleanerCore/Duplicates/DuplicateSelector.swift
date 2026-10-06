@@ -29,16 +29,26 @@ public struct DuplicateRemovalPlan: Sendable {
 /// Regras de seleção. Invariante: um grupo nunca fica com todas as cópias marcadas.
 public enum DuplicateSelector {
     public static func keeper(of files: [DuplicateFile], rule: DuplicateKeepRule) -> DuplicateFile? {
+        keeper(of: files, rule: rule, folderPrefix: folderPrefix(rule))
+    }
+
+    /// `folderPrefix` já canônico: em lote, o realpath da pasta preferida roda uma vez só.
+    static func keeper(of files: [DuplicateFile], rule: DuplicateKeepRule, folderPrefix: String?) -> DuplicateFile? {
         switch rule {
         case .oldest:
             return files.min { precedes($0, $1, newestFirst: false) }
         case .newest:
             return files.min { precedes($0, $1, newestFirst: true) }
-        case .inFolder(let folder):
-            let prefix = DuplicateRoots.canonical(folder)
+        case .inFolder:
+            guard let prefix = folderPrefix else { return files.min { precedes($0, $1, newestFirst: false) } }
             let inside = files.filter { contains(folder: prefix, $0.url) }
             return (inside.isEmpty ? files : inside).min { precedes($0, $1, newestFirst: false) }
         }
+    }
+
+    static func folderPrefix(_ rule: DuplicateKeepRule) -> String? {
+        if case .inFolder(let folder) = rule { return DuplicateRoots.canonical(folder) }
+        return nil
     }
 
     /// Marca tudo menos a cópia que fica em cada grupo. Grupos de clones APFS ficam de fora:
@@ -46,16 +56,22 @@ public enum DuplicateSelector {
     public static func autoSelect(_ groups: [DuplicateGroup], rule: DuplicateKeepRule,
                                   includeClones: Bool = false) -> Set<URL> {
         var selection = Set<URL>()
+        let prefix = folderPrefix(rule)
         for group in groups where group.files.count > 1 {
             if group.isCloneGroup, !includeClones { continue }
-            selection.formUnion(selectionKeepingOne(group, rule: rule))
+            selection.formUnion(selectionKeepingOne(group, rule: rule, folderPrefix: prefix))
         }
         return selection
     }
 
     /// Todas as cópias do grupo menos a que fica pela regra.
     public static func selectionKeepingOne(_ group: DuplicateGroup, rule: DuplicateKeepRule) -> Set<URL> {
-        guard group.files.count > 1, let keep = keeper(of: group.files, rule: rule) else { return [] }
+        selectionKeepingOne(group, rule: rule, folderPrefix: folderPrefix(rule))
+    }
+
+    static func selectionKeepingOne(_ group: DuplicateGroup, rule: DuplicateKeepRule, folderPrefix: String?) -> Set<URL> {
+        guard group.files.count > 1,
+              let keep = keeper(of: group.files, rule: rule, folderPrefix: folderPrefix) else { return [] }
         return Set(group.files.lazy.filter { $0.url != keep.url }.map(\.url))
     }
 
@@ -97,8 +113,9 @@ public enum DuplicateSelector {
     public static func enforcingKeep(_ selection: Set<URL>, in groups: [DuplicateGroup],
                                      rule: DuplicateKeepRule = .oldest) -> Set<URL> {
         var result = selection
+        let prefix = folderPrefix(rule)
         for group in groups where !group.files.isEmpty && group.files.allSatisfy({ result.contains($0.url) }) {
-            if let keep = keeper(of: group.files, rule: rule) { result.remove(keep.url) }
+            if let keep = keeper(of: group.files, rule: rule, folderPrefix: prefix) { result.remove(keep.url) }
         }
         return result
     }

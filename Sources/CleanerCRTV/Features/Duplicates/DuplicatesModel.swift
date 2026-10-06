@@ -22,6 +22,8 @@ struct DuplicateScanStats: Equatable {
     var filesConsidered: Int
     var skippedCloud: Int
     var skippedUnreadable: Int
+    var unreadableFolders: Int
+    var rootsScanned: Int
     var minSize: DuplicateMinSize
     var date: Date
 }
@@ -32,6 +34,9 @@ final class DuplicatesModel: ScanningFeature {
     // MARK: - Ajustes (persistidos)
 
     private(set) var roots: [URL] = DuplicateRoots.load()
+    /// Pastas da lista que não existem agora (disco desconectado). Guardado: a tela não consulta o disco a cada quadro.
+    private(set) var unavailableRoots: Set<URL> = []
+    private(set) var rootsAreDefault = true
     var minSize: DuplicateMinSize = .load() {
         didSet {
             guard minSize != oldValue else { return }
@@ -82,8 +87,12 @@ final class DuplicatesModel: ScanningFeature {
     @ObservationIgnored private var groupIndex: [String: Int] = [:]
     @ObservationIgnored private var scanTask: Task<DuplicateScanResult?, Never>?
     @ObservationIgnored private var hintTask: Task<Void, Never>?
+    /// Cada varredura nova ganha um número: a cancelada que termina depois não mexe no estado da atual.
+    @ObservationIgnored private var scanGeneration = 0
 
-    init() {}
+    init() {
+        refreshRootStatus()
+    }
 
     // MARK: - ScanningFeature
 
@@ -103,10 +112,14 @@ final class DuplicatesModel: ScanningFeature {
     var hasResults: Bool { stats != nil }
 
     func scan() async {
-        if let running = scanTask {
+        // Já rodando: espera a mesma. Uma cancelada (ainda terminando) não impede começar outra.
+        if let running = scanTask, !running.isCancelled {
             _ = await running.value
             return
         }
+        refreshRootStatus()
+        scanGeneration += 1
+        let generation = scanGeneration
         let options = DuplicateScanOptions(roots: roots, minSize: minSize.bytes)
         let scannedMinSize = minSize
         let tracker = DuplicateProgress()
@@ -122,8 +135,8 @@ final class DuplicatesModel: ScanningFeature {
         let poller = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .milliseconds(125))
-                guard !Task.isCancelled else { break }
-                self?.progress = tracker.snapshot
+                guard !Task.isCancelled, let self, self.scanGeneration == generation else { break }
+                self.progress = tracker.snapshot
             }
         }
         let result = await withTaskCancellationHandler {
@@ -132,6 +145,8 @@ final class DuplicatesModel: ScanningFeature {
             task.cancel()
         }
         poller.cancel()
+        // Outra varredura começou depois desta: ela cuida do estado.
+        guard generation == scanGeneration else { return }
         scanTask = nil
         isScanning = false
         // Cancelada: o resultado anterior (se houver) continua valendo.
@@ -166,14 +181,19 @@ final class DuplicatesModel: ScanningFeature {
         setRoots(DuplicateRoots.defaults)
     }
 
-    var rootsAreDefault: Bool {
-        roots.map(\.standardizedFileURL.path) == DuplicateRoots.defaults.map(\.standardizedFileURL.path)
+    /// Confere de novo quais pastas existem (ex.: ao voltar para a tela depois de ligar um disco).
+    func refreshRootStatus() {
+        let missing = Set(roots.filter { !DuplicateRoots.isAvailable($0) })
+        if missing != unavailableRoots { unavailableRoots = missing }
+        let isDefault = roots.map(\.standardizedFileURL.path) == DuplicateRoots.defaults.map(\.standardizedFileURL.path)
+        if isDefault != rootsAreDefault { rootsAreDefault = isDefault }
     }
 
     private func setRoots(_ next: [URL]) {
         guard next != roots else { return }
         roots = next
         DuplicateRoots.save(next)
+        refreshRootStatus()
         if stats != nil { settingsChanged = true }
     }
 
@@ -200,6 +220,8 @@ final class DuplicatesModel: ScanningFeature {
     // MARK: - Seleção
 
     func toggle(_ file: DuplicateFile, in group: DuplicateGroup) {
+        // Sempre a versão atual do grupo: a da tela pode ter cópias que já saíram.
+        guard let group = current(group) else { return }
         let step = DuplicateSelector.toggle(file.url, in: group, selection: selection)
         if step.refused {
             showHint("Pelo menos uma cópia de cada arquivo fica no lugar.")
@@ -210,11 +232,13 @@ final class DuplicatesModel: ScanningFeature {
     }
 
     func toggleGroup(_ group: DuplicateGroup, rule: DuplicateKeepRule = .oldest) {
+        guard let group = current(group) else { return }
         selection = DuplicateSelector.toggleGroup(group, rule: rule, selection: selection)
         refreshSelection(of: group)
     }
 
     func keepOnly(_ file: DuplicateFile, in group: DuplicateGroup) {
+        guard let group = current(group) else { return }
         selection = DuplicateSelector.keepOnly(file.url, in: group, selection: selection)
         refreshSelection(of: group)
     }
@@ -267,6 +291,7 @@ final class DuplicatesModel: ScanningFeature {
 
     /// "Ignorar sempre esta pasta": grava a exclusão e tira os arquivos dela da lista.
     func ignoreFolder(_ folder: URL) {
+        guard DuplicateRoots.canBeIgnored(folder) else { return }
         Exclusions.add(folder)
         let prefix = folder.standardizedFileURL.path + "/"
         let urls = groups.flatMap { $0.files.lazy.map(\.url).filter { $0.path.hasPrefix(prefix) } }
@@ -281,7 +306,8 @@ final class DuplicatesModel: ScanningFeature {
             group.files.contains(where: { removed.contains($0.url) }) ? group.removing(removed) : group
         }
         let alive = Set(groups.lazy.flatMap { $0.files.map(\.url) })
-        selection = selection.subtracting(removed).intersection(alive)
+        // Se a cópia desmarcada saiu (ex.: pasta ignorada), o grupo não pode ficar todo marcado.
+        selection = DuplicateSelector.enforcingKeep(selection.subtracting(removed).intersection(alive), in: groups)
         rebuildAll()
         // Se o grupo em foco sumiu, o foco vai para o vizinho que sobrou.
         if let focused, groupIndex[focused] == nil {
@@ -296,7 +322,9 @@ final class DuplicatesModel: ScanningFeature {
 
     private func apply(_ result: DuplicateScanResult, minSize: DuplicateMinSize) {
         stats = DuplicateScanStats(filesConsidered: result.filesConsidered, skippedCloud: result.skippedCloud,
-                                   skippedUnreadable: result.skippedUnreadable, minSize: minSize, date: Date())
+                                   skippedUnreadable: result.skippedUnreadable,
+                                   unreadableFolders: result.unreadableFolders, rootsScanned: result.rootsScanned,
+                                   minSize: minSize, date: Date())
         groups = result.groups
         selection = []
         settingsChanged = false
@@ -305,7 +333,7 @@ final class DuplicatesModel: ScanningFeature {
     }
 
     private func rebuildAll() {
-        groupIndex = Dictionary(uniqueKeysWithValues: groups.enumerated().map { ($1.id, $0) })
+        groupIndex = Dictionary(groups.enumerated().map { ($1.id, $0) }, uniquingKeysWith: { first, _ in first })
         totalReclaimable = groups.reduce(0) { $0 + $1.reclaimable }
         extraCopies = groups.reduce(0) { $0 + $1.files.count - 1 }
         let kinds = Set(groups.map(\.kind))
@@ -384,6 +412,10 @@ final class DuplicatesModel: ScanningFeature {
         guard !chosen.isEmpty else { return (0, 0) }
         let freed = group.freedBytes(removing: chosen).values.reduce(0, +)
         return (chosen.count, freed)
+    }
+
+    private func current(_ group: DuplicateGroup) -> DuplicateGroup? {
+        groupIndex[group.id].map { groups[$0] }
     }
 
     private func showHint(_ text: String) {

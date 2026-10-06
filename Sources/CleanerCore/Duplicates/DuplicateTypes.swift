@@ -219,5 +219,9 @@ public struct DuplicateScanResult: Sendable {
     public var skippedCloud: Int
     /// Arquivos que não deu para ler ou que mudaram durante a varredura.
     public var skippedUnreadable: Int
+    /// Pastas que o macOS não deixou listar (sem permissão).
+    public var unreadableFolders: Int = 0
+    /// Pastas da busca que existiam e foram percorridas (0 = nenhuma disponível).
+    public var rootsScanned: Int = 0
     public var duration: TimeInterval
 }

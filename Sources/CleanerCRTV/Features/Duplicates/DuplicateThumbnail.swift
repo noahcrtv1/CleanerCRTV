@@ -32,6 +32,7 @@ final class DuplicateThumbnailCache {
         }
         if Task.isCancelled { return nil }
         guard let image = representation?.nsImage else {
+            if failed.count > 5_000 { failed.removeAll() }
             failed.insert(key)
             return nil
         }
