@@ -57,6 +57,23 @@ public final class DiskMapTree: @unchecked Sendable {
         return nil
     }
 
+    // MARK: - Remoção
+
+    /// Pode ir para a remoção? Devolve a URL de ação (caminho de sempre, conferido no disco)
+    /// ou o motivo do bloqueio. Quem decide no fim é o `SafetyGuard`.
+    public func removability(of node: DiskMapNode) -> DiskMapRemovability {
+        if node === root { return .blocked("É a pasta mapeada") }
+        if node.isSynthetic { return .blocked("Espaço do macOS, de instantâneos e de outros volumes: somente leitura") }
+        if node.isAggregate { return .blocked("Grupo de arquivos: abra a pasta para escolher um por um") }
+        guard contains(node) else { return .blocked("Não está mais no mapa") }
+        guard let url = DiskMapPaths.actionURL(forPhysicalPath: node.path) else {
+            return .blocked("Não existe mais ou só é acessível pelo volume de dados")
+        }
+        if Exclusions.isExcluded(url) { return .blocked("Está na lista de pastas ignoradas") }
+        if case .blocked(let reason) = SafetyGuard.check(url) { return .blocked(reason) }
+        return .allowed(url)
+    }
+
     // MARK: - Mudanças depois da varredura (main actor)
 
     /// Tira o nó da árvore e desconta tamanho e arquivos de todos os ancestrais.
@@ -101,5 +118,20 @@ public final class DiskMapTree: @unchecked Sendable {
         root.children.sort(by: DiskMapNode.ordered)
         root.size += size
         root.logicalSize += size
+    }
+}
+
+public enum DiskMapRemovability: Equatable, Sendable {
+    case allowed(URL)
+    case blocked(String)
+
+    public var url: URL? {
+        if case .allowed(let url) = self { return url }
+        return nil
+    }
+
+    public var reason: String? {
+        if case .blocked(let reason) = self { return reason }
+        return nil
     }
 }

@@ -30,6 +30,12 @@ public enum DiskMapPaths {
         return URL(fileURLWithPath: shown)
     }
 
+    /// URL para ações só de leitura (Finder, Quick Look, copiar): o caminho traduzido quando ele
+    /// leva ao mesmo item; senão, o físico.
+    public static func revealURL(forPhysicalPath path: String) -> URL {
+        actionURL(forPhysicalPath: path) ?? URL(fileURLWithPath: path)
+    }
+
     /// `path` é exatamente um ponto de montagem?
     static func isMountPoint(_ path: String) -> Bool {
         var info = statfs()
@@ -47,6 +53,11 @@ public enum DiskMapPaths {
         defer { free(real) }
         return String(cString: real)
     }
+}
+
+public extension DiskMapNode {
+    /// Caminho como o usuário conhece (sem /System/Volumes/Data).
+    var displayPath: String { DiskMapPaths.displayPath(forPhysicalPath: path) }
 }
 
 /// Extensões de pastas que o Finder mostra como um item só (apps, bibliotecas, projetos…).
