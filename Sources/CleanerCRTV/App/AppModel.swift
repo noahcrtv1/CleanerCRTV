@@ -35,6 +35,7 @@ final class AppModel {
     var alert: String?
 
     // Módulos (cada um guarda o próprio estado; sobrevivem à troca de tela).
+    let dashboard = DashboardModel()
     let cleanup = CleanupModel()
     let largeOld = LargeOldModel()
     let duplicates = DuplicatesModel()
@@ -61,6 +62,19 @@ final class AppModel {
         case .diskMap: diskMap.badge
         case .uninstaller: uninstaller.badge
         case .optimize: optimize.badge
+        }
+    }
+
+    /// Módulo que varre o disco, para o Painel disparar.
+    func scanner(for feature: Feature) -> ScanningFeature? {
+        switch feature {
+        case .cleanup: cleanup
+        case .largeOld: largeOld
+        case .duplicates: duplicates
+        case .diskMap: diskMap
+        case .uninstaller: uninstaller
+        case .optimize: optimize
+        case .dashboard, .monitor, .history: nil
         }
     }
 
