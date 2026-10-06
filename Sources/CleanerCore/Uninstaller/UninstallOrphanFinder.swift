@@ -9,11 +9,15 @@ public struct UninstallOrphanContext: Sendable {
     public var runningIDs: Set<String>
     /// Labels de agentes/daemons do launchd cujo programa existe (minúsculas).
     public var liveAgentLabels: Set<String>
+    /// Contêineres de grupo que algum app instalado declara na assinatura (nome completo, minúsculas).
+    public var claimedGroups: Set<String>
 
-    public init(installedIDs: Set<String>, runningIDs: Set<String> = [], liveAgentLabels: Set<String> = []) {
+    public init(installedIDs: Set<String>, runningIDs: Set<String> = [], liveAgentLabels: Set<String> = [],
+                claimedGroups: Set<String> = []) {
         self.installedIDs = Set(installedIDs.map { $0.lowercased() })
         self.runningIDs = Set(runningIDs.map { $0.lowercased() })
         self.liveAgentLabels = Set(liveAgentLabels.map { $0.lowercased() })
+        self.claimedGroups = Set(claimedGroups.map { $0.lowercased() })
     }
 }
 
@@ -22,7 +26,8 @@ public struct UninstallOrphanContext: Sendable {
 /// Um item só entra se o nome é um identificador reverso (com.empresa.app) e:
 /// - não é da Apple, de biblioteca/atualizador compartilhado, nem do próprio CleanerCRTV;
 /// - nenhum app instalado tem esse identificador, um "pai" dele ou um "filho" dele;
-/// - nenhum app instalado ou aberto é do mesmo fabricante (com.empresa.*);
+/// - nada instalado (app, plug-in, ajudante) ou aberto é do mesmo fabricante (com.empresa.*);
+/// - nenhum app instalado (nem do sistema) declara o contêiner de grupo na assinatura;
 /// - nenhum agente do launchd vivo usa o identificador, e o LaunchServices não conhece app com ele;
 /// - nada dentro dele mudou nos últimos 30 dias (pode ser de ferramenta de linha de comando ou serviço).
 /// Agentes de início só contam quando o programa que eles chamam não existe mais.
@@ -32,6 +37,7 @@ public enum UninstallOrphanFinder {
     /// Regras puras (sem disco). Devolve o identificador dono se o item é candidato.
     public static func candidateKey(for entry: UninstallLibraryEntry, context: UninstallOrphanContext) -> String? {
         guard var key = entry.key else { return nil }
+        if entry.location.allowsGroupPrefix, context.claimedGroups.contains(entry.name.lowercased()) { return nil }
         if entry.location == .launchAgents {
             guard let agent = entry.agent, agent.program != nil, !agent.programExists else { return nil }
             if let label = agent.label?.lowercased(), UninstallBundleID.looksLikeBundleID(label) { key = label }
@@ -55,22 +61,27 @@ public enum UninstallOrphanFinder {
     }
 
     /// Varre, filtra, mede e agrupa. `isRegistered` pergunta se existe app com o identificador em qualquer lugar.
+    /// `known`: o que mais está instalado (plug-ins, apps fundos, apps do sistema…); nil = lê do disco.
     @concurrent
     public static func find(
         installed: [UninstallApp],
         runningIDs: Set<String>,
-        home: URL = Paths.home,
+        index: UninstallLibraryIndex,
         filter: UninstallFilter = .live(),
         isRegistered: @escaping @Sendable (String) -> Bool = { UninstallOrphanFinder.isRegisteredApp($0) },
+        known: UninstallKnownBundles.Snapshot? = nil,
         liveAgentLabels: Set<String>? = nil,
         now: Date = Date(),
         concurrency: Int = 4
     ) async -> [UninstallOrphanGroup] {
-        let index = UninstallLibraryIndex.build(home: home)
+        let home = index.library.deletingLastPathComponent()
+        let known = known ?? UninstallKnownBundles.collect(home: home)
+        if Task.isCancelled { return [] }
         let context = UninstallOrphanContext(
-            installedIDs: Set(installed.flatMap(\.allIDs)),
+            installedIDs: Set(installed.flatMap(\.allIDs)).union(known.ids),
             runningIDs: runningIDs,
-            liveAgentLabels: liveAgentLabels ?? Self.liveAgentLabels(index: index)
+            liveAgentLabels: liveAgentLabels ?? Self.liveAgentLabels(index: index),
+            claimedGroups: Set(installed.flatMap(\.appGroups)).union(known.groups)
         )
         var registered: [String: Bool] = [:]
         var candidates: [(entry: UninstallLibraryEntry, key: String)] = []
@@ -98,6 +109,25 @@ public enum UninstallOrphanFinder {
                                            ownerKey: candidate.key, size: m.bytes, modified: newest))
         }
         return group(items)
+    }
+
+    /// Mesma busca, lendo ~/Library de `home` na hora.
+    @concurrent
+    public static func find(
+        installed: [UninstallApp],
+        runningIDs: Set<String>,
+        home: URL = Paths.home,
+        filter: UninstallFilter = .live(),
+        isRegistered: @escaping @Sendable (String) -> Bool = { UninstallOrphanFinder.isRegisteredApp($0) },
+        known: UninstallKnownBundles.Snapshot? = nil,
+        liveAgentLabels: Set<String>? = nil,
+        now: Date = Date(),
+        concurrency: Int = 4
+    ) async -> [UninstallOrphanGroup] {
+        let index = UninstallLibraryIndex.build(home: home)
+        return await find(installed: installed, runningIDs: runningIDs, index: index, filter: filter,
+                          isRegistered: isRegistered, known: known, liveAgentLabels: liveAgentLabels,
+                          now: now, concurrency: concurrency)
     }
 
     /// Junta por identificador; ajudantes ("com.foo.app.helper") entram no grupo do pai quando ele também aparece.

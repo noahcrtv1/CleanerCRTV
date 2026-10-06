@@ -21,6 +21,8 @@ public struct UninstallApp: Sendable, Identifiable, Hashable {
     public let embeddedBundleIDs: [String]
     /// Outros nomes do app (CFBundleName, nome do arquivo…), para achar pastas com o nome dele.
     public let aliases: [String]
+    /// Contêineres de grupo que a assinatura do app (ou de extensões dele) declara, em minúsculas.
+    public let appGroups: [String]
     /// Muda quando o pacote é trocado (atualização); serve para reaproveitar o tamanho medido.
     public let stamp: String
     /// Motivo para não poder ser removido. nil = pode.
@@ -29,7 +31,7 @@ public struct UninstallApp: Sendable, Identifiable, Hashable {
     public init(url: URL, name: String, bundleID: String?, version: String? = nil, teamID: String? = nil,
                 size: Int64? = nil, lastUsed: Date? = nil, isAppStore: Bool = false, isApple: Bool = false,
                 isSelf: Bool = false, embeddedBundleIDs: [String] = [], aliases: [String] = [],
-                stamp: String = "", blockReason: String? = nil) {
+                appGroups: [String] = [], stamp: String = "", blockReason: String? = nil) {
         self.url = url
         self.name = name
         self.bundleID = bundleID
@@ -42,6 +44,7 @@ public struct UninstallApp: Sendable, Identifiable, Hashable {
         self.isSelf = isSelf
         self.embeddedBundleIDs = embeddedBundleIDs
         self.aliases = aliases
+        self.appGroups = Array(Set(appGroups.map { $0.lowercased() })).sorted()
         self.stamp = stamp
         self.blockReason = blockReason
     }

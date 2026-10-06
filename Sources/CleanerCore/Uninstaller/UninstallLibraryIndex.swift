@@ -122,12 +122,12 @@ public struct UninstallLibraryEntry: Sendable, Hashable {
         }
         var team: String?
         if location.allowsGroupPrefix {
-            if base.lowercased().hasPrefix("group.") {
-                base = String(base.dropFirst("group.".count))
-            } else if let dot = base.firstIndex(of: "."), isTeamID(base[..<dot]) {
+            if let dot = base.firstIndex(of: "."), isTeamID(base[..<dot]) {
                 team = String(base[..<dot])
                 base = String(base[base.index(after: dot)...])
             }
+            // "group.<id>" e "<EQUIPE>.group.<id>"
+            if base.lowercased().hasPrefix("group.") { base = String(base.dropFirst("group.".count)) }
         }
         guard !base.isEmpty else { return nil }
         return (base, team)
@@ -153,6 +153,10 @@ public struct UninstallLibraryIndex: Sendable {
         self.library = library
         self.entries = entries
     }
+
+    /// Lê fora da main.
+    @concurrent
+    public static func load(home: URL = Paths.home) async -> UninstallLibraryIndex { build(home: home) }
 
     public static func build(home: URL) -> UninstallLibraryIndex {
         let library = home.appendingPathComponent("Library", isDirectory: true)

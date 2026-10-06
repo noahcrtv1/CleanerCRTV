@@ -68,10 +68,18 @@ public enum UninstallInventory {
             blockReason = "Protegido: \(reason)."
         }
 
+        let signing = signingInfo(of: url)
+        let embedded = embeddedBundles(in: url)
+        var groups = signing.groups
+        // Extensões e itens de início costumam declarar grupos próprios.
+        for bundle in embedded.filter({ ["appex", "app"].contains($0.url.pathExtension.lowercased()) }).prefix(16) {
+            groups.append(contentsOf: signingInfo(of: bundle.url).groups)
+        }
+
         return UninstallApp(
-            url: url, name: name, bundleID: bundleID, version: version, teamID: teamIdentifier(of: url),
+            url: url, name: name, bundleID: bundleID, version: version, teamID: signing.team,
             lastUsed: spotlightLastUsed(url), isAppStore: isAppStore, isApple: isApple, isSelf: isSelf,
-            embeddedBundleIDs: embeddedBundleIDs(in: url), aliases: aliases, stamp: stamp(of: url),
+            embeddedBundleIDs: embedded.map(\.id), aliases: aliases, appGroups: groups, stamp: stamp(of: url),
             blockReason: blockReason
         )
     }
@@ -104,14 +112,18 @@ public enum UninstallInventory {
 
     // MARK: - Detalhes
 
-    /// Identificador de equipe da assinatura (não valida a assinatura, só lê).
-    static func teamIdentifier(of url: URL) -> String? {
+    /// Equipe e grupos de app da assinatura (só lê; não valida a assinatura).
+    static func signingInfo(of url: URL) -> (team: String?, groups: [String]) {
         var staticCode: SecStaticCode?
-        guard SecStaticCodeCreateWithPath(url as CFURL, [], &staticCode) == errSecSuccess, let staticCode else { return nil }
+        guard SecStaticCodeCreateWithPath(url as CFURL, [], &staticCode) == errSecSuccess, let staticCode else { return (nil, []) }
         var info: CFDictionary?
-        guard SecCodeCopySigningInformation(staticCode, SecCSFlags(rawValue: kSecCSSigningInformation), &info) == errSecSuccess,
-              let dict = info as? [String: Any] else { return nil }
-        return (dict[kSecCodeInfoTeamIdentifier as String] as? String)?.uninstallNonEmpty
+        let flags = SecCSFlags(rawValue: kSecCSSigningInformation | kSecCSRequirementInformation)
+        guard SecCodeCopySigningInformation(staticCode, flags, &info) == errSecSuccess,
+              let dict = info as? [String: Any] else { return (nil, []) }
+        let team = (dict[kSecCodeInfoTeamIdentifier as String] as? String)?.uninstallNonEmpty
+        let entitlements = dict[kSecCodeInfoEntitlementsDict as String] as? [String: Any]
+        let groups = (entitlements?["com.apple.security.application-groups"] as? [String]) ?? []
+        return (team, groups.filter { !$0.isEmpty })
     }
 
     /// Último uso registrado pelo Spotlight (abrir pelo Finder, Dock, Launchpad…).
@@ -120,21 +132,24 @@ public enum UninstallInventory {
         return MDItemCopyAttribute(item, kMDItemLastUsedDate) as? Date
     }
 
-    /// Identificadores de ajudantes, itens de início, serviços XPC e extensões dentro do pacote.
-    static func embeddedBundleIDs(in app: URL) -> [String] {
+    /// Ajudantes, itens de início, serviços XPC e extensões dentro do pacote (identificador e caminho).
+    static func embeddedBundles(in app: URL) -> [(id: String, url: URL)] {
         let folders = ["Contents/Library/LoginItems", "Contents/XPCServices", "Contents/PlugIns", "Contents/Helpers",
                        "Contents/Frameworks", "Contents/MacOS", "Contents/Library/Helpers"]
         let extensions: Set<String> = ["app", "xpc", "appex"]
-        var ids = Set<String>()
+        var found: [(id: String, url: URL)] = []
+        var seen = Set<String>()
         for folder in folders {
             let dir = app.appendingPathComponent(folder, isDirectory: true)
             for entry in children(of: dir) where extensions.contains(entry.url.pathExtension.lowercased()) && !entry.isSymlink {
                 let plist = readPlist(entry.url.appendingPathComponent("Contents/Info.plist"))
-                if let id = (plist?["CFBundleIdentifier"] as? String)?.uninstallNonEmpty { ids.insert(id) }
-                if ids.count >= 64 { return ids.sorted() }
+                if let id = (plist?["CFBundleIdentifier"] as? String)?.uninstallNonEmpty, seen.insert(id).inserted {
+                    found.append((id, entry.url))
+                }
+                if found.count >= 64 { return found.sorted { $0.id < $1.id } }
             }
         }
-        return ids.sorted()
+        return found.sorted { $0.id < $1.id }
     }
 
     /// Identidade do pacote: muda quando ele é substituído ou atualizado.

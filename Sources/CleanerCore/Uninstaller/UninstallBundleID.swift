@@ -38,7 +38,10 @@ public enum UninstallBundleID {
     /// Componentes do sistema, bibliotecas embutidas em muitos apps, atualizadores e agentes de gestão.
     /// Nunca viram "resto de app removido" nem resto de outro app.
     public static func isShared(_ key: String) -> Bool {
-        sharedPrefixes.contains { isSame(key, orChildOf: $0) }
+        if sharedPrefixes.contains(where: { isSame(key, orChildOf: $0) }) { return true }
+        // "groups.com.apple.x", "foo.com.apple.y": qualquer coisa com com.apple no meio é da Apple.
+        let parts = key.split(separator: ".")
+        return parts.indices.dropLast().contains { parts[$0] == "com" && parts[$0 + 1] == "apple" }
     }
 
     static let hostingDomains: Set<String> = [
@@ -47,7 +50,8 @@ public enum UninstallBundleID {
 
     static let sharedPrefixes: [String] = [
         // Apple
-        "com.apple", "group.com.apple", "systemgroup.com.apple", "apple",
+        "com.apple", "group.com.apple", "groups.com.apple", "systemgroup.com.apple", "apple",
+        "is.workflow", "com.shazam",
         // próprio app
         UninstallInventory.selfBundleID,
         // bibliotecas e relatórios de falha embutidos
@@ -60,6 +64,8 @@ public enum UninstallBundleID {
         "com.adobe.acc", "com.adobe.ccxprocess", "com.adobe.armdc", "com.adobe.agsservice", "com.adobe.adobeipcbroker",
         "com.adobe.ngl", "com.adobe.dunamis", "com.adobe.crashreporter", "com.adobe.accmac", "com.adobe.ccd",
         "com.oracle.java", "com.oracle.oss", "org.python", "org.gpgtools", "org.macports", "sh.brew", "org.cocoapods",
+        // partes do sistema com identificador fora de com.apple
+        "org.cups", "edu.mit.kerberos", "org.openldap", "org.openssh", "com.openssh", "org.swift", "org.llvm", "org.ntp",
         // gestão e segurança corporativa (rodam como serviço, sem app)
         "com.jamf", "com.jamfsoftware", "com.kandji", "com.mosyle", "com.addigy", "com.crowdstrike", "com.sentinelone",
         "com.zscaler", "com.paloaltonetworks", "com.cisco", "com.sophos", "com.microsoft.wdav", "com.microsoft.intune",

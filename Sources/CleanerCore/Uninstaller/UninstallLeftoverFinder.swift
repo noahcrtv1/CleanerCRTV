@@ -4,27 +4,38 @@ import Foundation
 ///
 /// Regras (nunca por pedaço de nome):
 /// - identificador idêntico ao do app, ou de um ajudante dele ("com.foo.app.helper") → confiança alta;
+///   ajudante embutido com outro identificador do mesmo fabricante → média;
 ///   se outro app instalado tem um identificador mais específico que também casa, o item é dele;
-/// - contêiner de grupo "group.<id>" → alta; "<EQUIPE>.<id>" → alta se a equipe é a da assinatura,
-///   média se o app não tem equipe, ignorado se a equipe é outra;
+///   identificador que outro app instalado também traz (outra cópia, ajudante comum) não conta;
+/// - contêiner de grupo declarado na assinatura do app → alta; declarado por outro app instalado → nunca;
+///   "group.<id>" → como acima; "<EQUIPE>.<id>" → só se a equipe é a da assinatura
+///   (média se o app não tem equipe, ignorado se a equipe é outra);
 /// - agente de início cujo Label é do app ou cujo programa está dentro do pacote → alta;
 /// - pasta com o nome exato do app em Application Support, Caches ou Logs → média.
 public enum UninstallLeftoverFinder {
     /// Só regras, sem tocar no disco (tamanhos zerados). `installed` são todos os apps instalados.
     public static func match(app: UninstallApp, in index: UninstallLibraryIndex, installed: [UninstallApp]) -> [UninstallLeftover] {
-        let ownIDs = Set(app.matchIDs)
+        let appPath = app.url.standardizedFileURL.path
+        let others = installed.filter { $0.url.standardizedFileURL.path != appPath }
+        let otherIDs = Set(others.flatMap(\.allIDs))
         let mainID = app.bundleID?.lowercased()
-        var allIDs = Set(installed.flatMap(\.allIDs))
-        allIDs.formUnion(ownIDs)
-        let others = installed.filter { $0.url != app.url }
-        let otherNames = Set(others.flatMap(\.matchNames))
-        let ownNames = Set(app.matchNames).subtracting(otherNames)
-        let appPath = app.url.standardizedFileURL.path + "/"
+        var ownIDs = Set(app.matchIDs).subtracting(otherIDs)
+        if let mainID, otherIDs.contains(mainID) {
+            ownIDs = ownIDs.filter { !UninstallBundleID.isSame($0, orChildOf: mainID) }
+        }
+        let mainIsOwn = mainID.map { ownIDs.contains($0) } ?? false
+        let allIDs = otherIDs.union(app.allIDs).union(ownIDs)
+        let ownNames = Set(app.matchNames).subtracting(others.flatMap(\.matchNames))
+        let ownGroups = Set(app.appGroups)
+        let otherGroups = Set(others.flatMap(\.appGroups))
+        let bundlePrefix = appPath + "/"
 
-        func ownedKey(_ key: String) -> Bool {
-            guard ownIDs.contains(where: { UninstallBundleID.isSame(key, orChildOf: $0) }) else { return false }
-            guard let owner = UninstallBundleID.owner(of: key, among: allIDs) else { return false }
-            return ownIDs.contains(owner)
+        /// Confiança se `key` pertence a este app; nil se não.
+        func ownership(_ key: String) -> UninstallConfidence? {
+            guard ownIDs.contains(where: { UninstallBundleID.isSame(key, orChildOf: $0) }),
+                  let owner = UninstallBundleID.owner(of: key, among: allIDs), ownIDs.contains(owner) else { return nil }
+            if mainIsOwn, let mainID, UninstallBundleID.isSame(key, orChildOf: mainID) { return .high }
+            return .medium
         }
 
         var results: [UninstallLeftover] = []
@@ -32,25 +43,36 @@ public enum UninstallLeftoverFinder {
             var confidence: UninstallConfidence?
             var owner = mainID ?? ""
 
-            if let key = entry.key, ownedKey(key) {
+            if entry.location.allowsGroupPrefix {
+                let name = entry.name.lowercased()
+                // Grupo declarado por outro app instalado: é dele (ou compartilhado), nunca sai junto.
+                if otherGroups.contains(name) { continue }
+                if ownGroups.contains(name) {
+                    results.append(UninstallLeftover(url: entry.url, kind: entry.location.kind, confidence: .high,
+                                                     ownerKey: name, modified: entry.modified))
+                    continue
+                }
+            }
+
+            if let key = entry.key, let found = ownership(key) {
                 owner = key
                 if let team = entry.teamPrefix {
                     if let appTeam = app.teamID {
-                        confidence = appTeam.caseInsensitiveCompare(team) == .orderedSame ? .high : nil
+                        confidence = appTeam.caseInsensitiveCompare(team) == .orderedSame ? found : nil
                     } else {
                         confidence = .medium
                     }
                 } else {
-                    confidence = .high
+                    confidence = found
                 }
             }
 
             if confidence == nil, entry.location == .launchAgents, let agent = entry.agent {
-                if let label = agent.label?.lowercased(), ownedKey(label) {
-                    confidence = .high
+                if let label = agent.label?.lowercased(), let found = ownership(label) {
+                    confidence = found
                     owner = label
-                } else if let program = agent.program, program.hasPrefix(appPath)
-                            || agent.arguments.contains(where: { $0.contains(appPath) }) {
+                } else if let program = agent.program,
+                          program.hasPrefix(bundlePrefix) || agent.arguments.contains(where: { $0.hasPrefix(bundlePrefix) }) {
                     confidence = .high
                 }
             }
@@ -73,11 +95,10 @@ public enum UninstallLeftoverFinder {
     public static func find(
         for apps: [UninstallApp],
         installed: [UninstallApp],
-        home: URL = Paths.home,
+        index: UninstallLibraryIndex,
         filter: UninstallFilter = .live(),
         concurrency: Int = 4
     ) async -> [URL: [UninstallLeftover]] {
-        let index = UninstallLibraryIndex.build(home: home)
         var pending: [(app: URL, item: UninstallLeftover)] = []
         var result: [URL: [UninstallLeftover]] = [:]
         for app in apps {
@@ -91,9 +112,9 @@ public enum UninstallLeftoverFinder {
             UninstallMeasure.measure(pair.item.url, isCancelled: { Task.isCancelled })
         }
         if Task.isCancelled { return [:] }
-        for (index, pair) in pending.enumerated() {
+        for (i, pair) in pending.enumerated() {
             var item = pair.item
-            if let m = measured[index] {
+            if let m = measured[i] {
                 item.size = m.bytes
                 item.modified = m.newest ?? item.modified
             }
@@ -103,5 +124,18 @@ public enum UninstallLeftoverFinder {
             result[key]?.sort { ($0.kind.order, -$0.size) < ($1.kind.order, -$1.size) }
         }
         return result
+    }
+
+    /// Mesma busca, lendo ~/Library de `home` na hora.
+    @concurrent
+    public static func find(
+        for apps: [UninstallApp],
+        installed: [UninstallApp],
+        home: URL = Paths.home,
+        filter: UninstallFilter = .live(),
+        concurrency: Int = 4
+    ) async -> [URL: [UninstallLeftover]] {
+        let index = UninstallLibraryIndex.build(home: home)
+        return await find(for: apps, installed: installed, index: index, filter: filter, concurrency: concurrency)
     }
 }

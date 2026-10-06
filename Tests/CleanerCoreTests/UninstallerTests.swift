@@ -3,7 +3,7 @@ import Testing
 @testable import CleanerCore
 
 /// Árvore de arquivos descartável para os testes (nunca toca nos arquivos do usuário).
-private final class UninstallFakeTree {
+final class UninstallFakeTree {
     let root: URL
 
     init(underHome: Bool = false) throws {
@@ -67,9 +67,9 @@ private final class UninstallFakeTree {
 private let permissive = UninstallFilter(excluded: [], checksSafety: false)
 
 private func app(_ id: String?, name: String, path: String = "/Applications", team: String? = nil,
-                 embedded: [String] = [], aliases: [String] = []) -> UninstallApp {
+                 embedded: [String] = [], aliases: [String] = [], groups: [String] = []) -> UninstallApp {
     UninstallApp(url: URL(fileURLWithPath: "\(path)/\(name).app"), name: name, bundleID: id, teamID: team,
-                 embeddedBundleIDs: embedded, aliases: aliases)
+                 embeddedBundleIDs: embedded, aliases: aliases, appGroups: groups)
 }
 
 // MARK: - Identificadores
@@ -94,6 +94,14 @@ struct UninstallBundleIDTests {
         #expect(UninstallBundleID.vendor(of: "io.github.fulano.tool") == "io.github.fulano")
     }
 
+    @Test func appleAnywhereIsShared() {
+        #expect(UninstallBundleID.isShared("com.apple.finder"))
+        #expect(UninstallBundleID.isShared("groups.com.apple.podcasts"))
+        #expect(UninstallBundleID.isShared("is.workflow.my.app"))
+        #expect(!UninstallBundleID.isShared("com.applesauce.app"))
+        #expect(!UninstallBundleID.isShared("com.acme.notes"))
+    }
+
     @Test func parsesNamesPerFolder() {
         func key(_ name: String, _ location: UninstallLocation) -> String? {
             UninstallLibraryEntry(url: URL(fileURLWithPath: "/x/\(name)"), location: location).key
@@ -110,6 +118,9 @@ struct UninstallBundleIDTests {
         #expect(team.key == "com.foo.app")
         #expect(team.teamPrefix == "ABCDE12345")
         #expect(key("group.com.foo.app", .caches) == "group.com.foo.app")
+        let teamGroup = UninstallLibraryEntry(url: URL(fileURLWithPath: "/x/ABCDE12345.group.com.foo.app"), location: .groupContainers)
+        #expect(teamGroup.key == "com.foo.app")
+        #expect(teamGroup.teamPrefix == "ABCDE12345")
     }
 }
 
@@ -161,7 +172,8 @@ struct UninstallLeftoverTests {
         let found = UninstallLeftoverFinder.match(app: notes, in: index, installed: [notes, notesPro, editor])
         var map: [String: UninstallConfidence] = [:]
         for item in found {
-            let rel = String(item.url.path.dropFirst(t.library.path.count + 1))
+            // /var e /private/var: compara só o que vem depois de "/Library/".
+            let rel = item.url.path.components(separatedBy: "/Library/").last ?? item.url.path
             map[rel] = item.confidence
         }
         return map
@@ -234,6 +246,50 @@ struct UninstallLeftoverTests {
         #expect((cache?.size ?? 0) >= 50_000)
     }
 
+    @Test func anotherCopyKeepsItsData() throws {
+        // Duas cópias do mesmo app: desinstalar uma não pode levar os dados da outra.
+        let t = try buildTree()
+        let copy = app("com.acme.notes", name: "Notes", path: NSHomeDirectory() + "/Applications", team: "ABCDE12345")
+        let found = UninstallLeftoverFinder.match(app: notes, in: .build(home: t.root), installed: [notes, copy, editor])
+        #expect(found.allSatisfy { $0.kind == .launchAgent }, "só o agente que aponta para dentro deste pacote")
+        #expect(found.map(\.url.lastPathComponent) == ["runner.plist"])
+    }
+
+    @Test func sharedEmbeddedHelpersAreNotClaimed() throws {
+        let t = try UninstallFakeTree()
+        try t.file("Library/Caches/com.acme.crashdaemon/x")
+        try t.file("Library/Caches/com.acme.syncer/x")
+        try t.file("Library/Caches/com.acme.writer.helper/x")
+        let writer = app("com.acme.writer", name: "Writer", embedded: ["com.acme.crashdaemon", "com.acme.syncer", "com.acme.writer.helper"])
+        let sheets = app("com.acme.sheets", name: "Sheets", embedded: ["com.acme.crashdaemon"])
+        let found = UninstallLeftoverFinder.match(app: writer, in: .build(home: t.root), installed: [writer, sheets])
+        var map: [String: UninstallConfidence] = [:]
+        for item in found { map[item.url.lastPathComponent] = item.confidence }
+        #expect(map["com.acme.crashdaemon"] == nil, "também é do Sheets")
+        #expect(map["com.acme.syncer"] == .medium, "embutido, mas fora do identificador do app")
+        #expect(map["com.acme.writer.helper"] == .high)
+    }
+
+    @Test func signedAppGroupsDecideGroupContainers() throws {
+        let t = try UninstallFakeTree()
+        try t.dir("Library/Group Containers/group.com.acme.shared")         // declarado pelos dois
+        try t.dir("Library/Group Containers/ABCDE12345.writer.data")        // só o Writer declara
+        try t.dir("Library/Group Containers/group.com.acme.writer")         // regra do identificador
+        try t.dir("Library/Group Containers/group.com.acme.writer.sync")    // filho, mas o Sheets declara
+        try t.dir("Library/Application Scripts/ABCDE12345.writer.data")
+        let writer = app("com.acme.writer", name: "Writer", team: "ABCDE12345",
+                         groups: ["group.com.acme.shared", "ABCDE12345.writer.data"])
+        let sheets = app("com.acme.sheets", name: "Sheets", groups: ["group.com.acme.shared", "group.com.acme.writer.sync"])
+        let found = UninstallLeftoverFinder.match(app: writer, in: .build(home: t.root), installed: [writer, sheets])
+        var map: [String: UninstallConfidence] = [:]
+        for item in found { map["\(item.kind.rawValue)/\(item.url.lastPathComponent)"] = item.confidence }
+        #expect(map["groupContainer/group.com.acme.shared"] == nil)
+        #expect(map["groupContainer/ABCDE12345.writer.data"] == .high)
+        #expect(map["scripts/ABCDE12345.writer.data"] == .high)
+        #expect(map["groupContainer/group.com.acme.writer"] == .high)
+        #expect(map["groupContainer/group.com.acme.writer.sync"] == nil)
+    }
+
     @Test func blockedAppsGetNoLeftovers() async throws {
         let t = try buildTree()
         let apple = UninstallApp(url: URL(fileURLWithPath: "/Applications/Notes.app"), name: "Notes", bundleID: "com.acme.notes",
@@ -265,7 +321,7 @@ struct UninstallLeftoverTests {
 
 @Suite("Desinstalador: restos de apps removidos")
 struct UninstallOrphanTests {
-    let editor = app("com.acme.editor", name: "Editor", embedded: ["com.acme.editor.helper"])
+    let editor = app("com.acme.editor", name: "Editor", embedded: ["com.acme.editor.helper"], groups: ["group.com.meta.family"])
 
     @Test func findsOnlyConservativeOrphans() async throws {
         let t = try UninstallFakeTree()
@@ -284,6 +340,11 @@ struct UninstallOrphanTests {
         try t.file("Library/Preferences/com.running.app.plist")            // aberto agora
         try t.file("Library/Preferences/com.registered.app.plist")         // app existe em outro lugar
         try t.file("Library/Preferences/com.live.daemon.plist")            // agente vivo
+        try t.file("Library/Preferences/net.plugin.synth.plist")           // fabricante de plug-in instalado
+        try t.dir("Library/Group Containers/group.com.meta.family")         // grupo declarado por app instalado
+        try t.dir("Library/Group Containers/group.com.system.thing")        // grupo declarado por app do sistema
+        try t.dir("Library/Group Containers/243LU875E5.groups.com.apple.podcasts") // Apple
+        try t.dir("Library/Group Containers/group.is.workflow.my.app")      // Atalhos (Apple)
         try t.dir("Library/Logs/1.2.3")                                    // não é identificador
         try t.dir("Library/Application Support/Spotify")                   // não é identificador
         try t.plist("Library/LaunchAgents/com.alive.agent.plist", ["Label": "com.alive.agent", "Program": "/bin/ls"])
@@ -296,7 +357,9 @@ struct UninstallOrphanTests {
 
         let groups = await UninstallOrphanFinder.find(
             installed: [editor], runningIDs: ["com.running.app"], home: t.root, filter: permissive,
-            isRegistered: { $0.lowercased() == "com.registered.app" }, liveAgentLabels: ["com.live.daemon"]
+            isRegistered: { $0.lowercased() == "com.registered.app" },
+            known: .init(ids: ["net.plugin.reverb"], groups: ["group.com.system.thing"]),
+            liveAgentLabels: ["com.live.daemon"]
         )
         #expect(groups.map(\.key) == ["com.gone.app"])
         let names = Set(groups.first?.items.map(\.url.lastPathComponent) ?? [])
@@ -304,6 +367,17 @@ struct UninstallOrphanTests {
                           "com.gone.app.agent.plist"])
         #expect(groups.first?.items.allSatisfy { $0.confidence == .medium } == true)
         #expect((groups.first?.size ?? 0) >= 20_000)
+    }
+
+    @Test func claimedGroupsAreNeverOrphans() {
+        let context = UninstallOrphanContext(installedIDs: [], claimedGroups: ["group.com.meta.family", "ABCDE12345.com.gone.data"])
+        func candidate(_ name: String) -> String? {
+            UninstallOrphanFinder.candidateKey(for: UninstallLibraryEntry(url: URL(fileURLWithPath: "/x/\(name)"), location: .groupContainers),
+                                               context: context)
+        }
+        #expect(candidate("group.com.meta.family") == nil)
+        #expect(candidate("ABCDE12345.com.gone.data") == nil)
+        #expect(candidate("group.com.gone.app") == "com.gone.app")
     }
 
     @Test func installedPrefixAndVendorExclude() {
@@ -401,6 +475,22 @@ struct UninstallInventoryTests {
         let unknown = UninstallApp(url: URL(fileURLWithPath: "/b.app"), name: "B", bundleID: "x.y.b")
         #expect(old.isUnused(since: cutoff))
         #expect(!unknown.isUnused(since: cutoff))
+    }
+
+    @Test func knownBundlesReadPluginsDeepAppsAndHelpers() throws {
+        let t = try UninstallFakeTree()
+        try t.plist("Apps/Vendor/Suite/Tool/Deep.app/Contents/Info.plist", ["CFBundleIdentifier": "com.vendor.deep"])
+        try t.plist("Apps/Vendor/Suite/Tool/Deep.app/Contents/Helpers/Inner.app/Contents/Info.plist", ["CFBundleIdentifier": "com.vendor.inner"])
+        try t.plist("SysLib/Audio/Plug-Ins/Components/Reverb.component/Contents/Info.plist", ["CFBundleIdentifier": "net.plugin.Reverb"])
+        try t.plist("Library/QuickLook/Preview.qlgenerator/Contents/Info.plist", ["CFBundleIdentifier": "org.ql.preview"])
+        try t.file("SysLib/PrivilegedHelperTools/com.vendor.helper")
+        try t.plist("SysLib/LaunchDaemons/com.vendor.daemon.plist", ["Label": "com.vendor.daemon", "Program": "/x"])
+        try t.plist("SysApps/Utilities/Tool.app/Contents/Info.plist", ["CFBundleIdentifier": "com.system.tool"])
+        let ids = UninstallKnownBundles.collect(home: t.root, appRoots: [t.url("Apps")], systemApps: [t.url("SysApps")],
+                                                systemLibrary: t.url("SysLib")).ids
+        #expect(ids.isSuperset(of: ["com.vendor.deep", "net.plugin.reverb", "org.ql.preview", "com.vendor.helper",
+                                    "com.vendor.daemon", "com.system.tool"]))
+        #expect(!ids.contains("com.vendor.inner"), "não entra em pacotes")
     }
 
     @Test func measureReportsSizeAndNewestDate() throws {
