@@ -232,6 +232,28 @@ struct UninstallLeftoverTests {
         #expect(!UninstallLeftover(url: url, kind: .container, confidence: .high, ownerKey: "a").isSelectedByDefault)
         #expect(!UninstallLeftover(url: url, kind: .support, confidence: .high, ownerKey: "a").isSelectedByDefault)
         #expect(!UninstallLeftover(url: url, kind: .caches, confidence: .medium, ownerKey: "a").isSelectedByDefault)
+        #expect(!UninstallLeftover(url: url, kind: .scripts, confidence: .high, ownerKey: "a").isSelectedByDefault)
+    }
+
+    @Test func shortBundleIDOnlyMatchesExactly() throws {
+        // "com.acme" não pode levar os dados de outros apps do fabricante (com.acme.outro).
+        let t = try UninstallFakeTree()
+        try t.file("Library/Preferences/com.acme.plist")
+        try t.file("Library/Preferences/com.acme.other.plist")
+        try t.dir("Library/Caches/com.acme.other.helper")
+        let short = app("com.acme", name: "Acme")
+        let found = UninstallLeftoverFinder.match(app: short, in: .build(home: t.root), installed: [short])
+        #expect(found.map(\.url.lastPathComponent) == ["com.acme.plist"])
+    }
+
+    @Test func staleIndexEntriesAreSkipped() async throws {
+        let t = try buildTree()
+        let index = UninstallLibraryIndex.build(home: t.root)
+        try FileManager.default.removeItem(at: t.url("Library/Caches/com.acme.notes"))
+        let result = await UninstallLeftoverFinder.find(for: [notes], installed: [notes], index: index, filter: permissive)
+        let items = result[notes.url] ?? []
+        #expect(!items.isEmpty)
+        #expect(!items.contains { $0.kind == .caches && $0.url.lastPathComponent == "com.acme.notes" })
     }
 
     @Test func findMeasuresAndRespectsExclusions() async throws {

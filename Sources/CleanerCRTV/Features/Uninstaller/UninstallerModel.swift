@@ -111,6 +111,8 @@ final class UninstallerModel: ScanningFeature {
 
     @ObservationIgnored private var scanTask: Task<Void, Never>?
     @ObservationIgnored private var orphanTask: Task<Void, Never>?
+    /// Muda a cada busca de restos de apps removidos: resultado de busca antiga não sobrescreve o novo.
+    @ObservationIgnored private var orphanToken = UUID()
     /// Busca de restos em andamento por app; o `token` diz qual pedido é o mais novo.
     @ObservationIgnored private var leftoverTasks: [URL: (token: UUID, task: Task<Void, Never>)] = [:]
     @ObservationIgnored private var libraryIndex: UninstallLibraryIndex?
@@ -147,6 +149,7 @@ final class UninstallerModel: ScanningFeature {
 
     func cancel() {
         scanTask?.cancel()
+        stopOrphanSearch()
     }
 
     private func performScan() async {
@@ -155,6 +158,8 @@ final class UninstallerModel: ScanningFeature {
         scanProgress = nil
         scanCounter = nil
         refreshRunning()
+        stopOrphanSearch()
+        let orphanGeneration = orphanToken
         defer {
             isScanning = false
             isDiscovering = false
@@ -183,6 +188,8 @@ final class UninstallerModel: ScanningFeature {
         // Restos: só os do que continua selecionado ficam (para manter as escolhas) e são relidos.
         let keep = selection.intersection(found.map(\.url))
         leftovers = leftovers.filter { keep.contains($0.key) }
+        // Marcações de restos que saíram da lista não ficam valendo escondidas.
+        checkedLeftovers.formIntersection(leftovers.values.flatMap { $0.map(\.url) })
         leftoverTasks.values.forEach { $0.task.cancel() }
         leftoverTasks = [:]
         loadingLeftovers = []
@@ -207,7 +214,8 @@ final class UninstallerModel: ScanningFeature {
         guard !Task.isCancelled else { return }
 
         libraryIndex = index
-        setOrphans(groups)
+        // Uma busca de restos disparada durante a varredura (após remover algo) é mais nova.
+        if orphanToken == orphanGeneration { setOrphans(groups) }
         for app in apps { if let size = app.size { sizeCache[app.url] = (app.stamp, size) } }
         completedScan = true
         updateSummary()
@@ -338,8 +346,15 @@ final class UninstallerModel: ScanningFeature {
     func forget(_ app: UninstallApp) {
         apps.removeAll { $0.url == app.url }
         selection.remove(app.url)
-        leftovers[app.url] = nil
+        dropLeftovers(of: [app.url])
         updateSummary()
+    }
+
+    private func dropLeftovers(of appURLs: [URL]) {
+        for url in appURLs {
+            checkedLeftovers.subtract((leftovers[url] ?? []).map(\.url))
+            leftovers[url] = nil
+        }
     }
 
     func forgetLeftover(_ item: UninstallLeftover) {
@@ -453,6 +468,11 @@ final class UninstallerModel: ScanningFeature {
                 + "Salve o que estiver aberto, feche manualmente e tente de novo."
             return
         }
+        // Ao fechar, o app grava preferências e estado salvo: a lista de restos é refeita.
+        busyText = "Procurando restos…"
+        libraryIndex = nil
+        await requestLeftovers(for: request.running, force: true)?.value
+        busyText = nil
         await submit(request.action, apps: request.apps, skipped: 0, closed: request.running.map(\.name), appModel: appModel)
     }
 
@@ -513,10 +533,8 @@ final class UninstallerModel: ScanningFeature {
         guard !removed.isEmpty else { return }
         if action == .uninstall {
             let gone = apps.filter { removed.contains($0.url) }.map(\.url)
-            for url in gone {
-                leftovers[url] = nil
-                sizeCache[url] = nil
-            }
+            dropLeftovers(of: gone)
+            for url in gone { sizeCache[url] = nil }
             selection.subtract(gone)
             apps.removeAll { removed.contains($0.url) }
         }
@@ -535,18 +553,27 @@ final class UninstallerModel: ScanningFeature {
     }
 
     func refreshOrphans() {
-        orphanTask?.cancel()
+        stopOrphanSearch()
+        let token = orphanToken
         isSearchingOrphans = true
         let installed = apps
         let running = runningIDs
         orphanTask = Task { [weak self] in
             let (index, groups) = await Self.searchOrphans(installed: installed, running: running)
-            guard let self, !Task.isCancelled else { return }
+            guard let self, self.orphanToken == token, !Task.isCancelled else { return }
+            self.orphanTask = nil
+            self.isSearchingOrphans = false
             if self.libraryIndex == nil { self.libraryIndex = index }
             self.setOrphans(groups)
-            self.isSearchingOrphans = false
             self.updateSummary()
         }
+    }
+
+    private func stopOrphanSearch() {
+        orphanTask?.cancel()
+        orphanTask = nil
+        orphanToken = UUID()
+        isSearchingOrphans = false
     }
 
     // MARK: - Restos de apps removidos

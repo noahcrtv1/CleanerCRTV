@@ -59,7 +59,10 @@ private struct UninstallAppList: View {
 
             if model.visibleApps.isEmpty {
                 Group {
-                    if model.searchText.trimmingCharacters(in: .whitespaces).isEmpty {
+                    if model.apps.isEmpty {
+                        ContentUnavailableView("Nenhum app encontrado", systemImage: "app.dashed",
+                                               description: Text("Não achamos apps em Aplicativos nem em ~/Aplicativos."))
+                    } else if model.searchText.trimmingCharacters(in: .whitespaces).isEmpty {
                         ContentUnavailableView("Nenhum app aqui", systemImage: "app.dashed",
                                                description: Text("Nenhum app combina com o filtro \"\(model.appFilter.title)\"."))
                     } else {
@@ -72,7 +75,8 @@ private struct UninstallAppList: View {
                     ForEach(model.visibleApps) { app in
                         UninstallAppRow(app: app,
                                         isChecked: model.selection.contains(app.url),
-                                        isRunning: model.isRunning(app)) {
+                                        isRunning: model.isRunning(app),
+                                        isMeasuring: model.isMeasuring) {
                             model.toggle(app)
                         }
                         .tag(app.url)
@@ -127,6 +131,7 @@ private struct UninstallAppRow: View {
     let app: UninstallApp
     let isChecked: Bool
     let isRunning: Bool
+    let isMeasuring: Bool
     let onToggle: () -> Void
 
     var body: some View {
@@ -166,10 +171,15 @@ private struct UninstallAppRow: View {
                     .font(.callout.monospacedDigit())
                     .foregroundStyle(.secondary)
                     .contentTransition(.numericText())
-            } else {
+            } else if isMeasuring {
                 ProgressView()
                     .controlSize(.mini)
                     .accessibilityLabel("Medindo")
+            } else {
+                // Varredura interrompida antes de medir este app.
+                Text("—")
+                    .foregroundStyle(.tertiary)
+                    .accessibilityLabel("Tamanho desconhecido")
             }
         }
         .padding(.vertical, 3)

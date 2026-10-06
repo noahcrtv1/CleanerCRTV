@@ -133,9 +133,10 @@ public enum UninstallLeftoverKind: String, Sendable, Hashable, CaseIterable, Cod
     }
 
     /// Pode guardar documentos, bancos de dados ou downloads criados no app: nunca vem marcado.
+    /// Application Scripts guarda scripts que o próprio usuário instalou para o app.
     public var mayHoldUserData: Bool {
         switch self {
-        case .support, .container, .groupContainer: true
+        case .support, .container, .groupContainer, .scripts: true
         default: false
         }
     }

@@ -87,7 +87,8 @@ public enum UninstallOrphanFinder {
         var candidates: [(entry: UninstallLibraryEntry, key: String)] = []
         for entry in index.entries {
             if Task.isCancelled { return [] }
-            guard let key = candidateKey(for: entry, context: context), filter.allows(entry.url) else { continue }
+            guard let key = candidateKey(for: entry, context: context), FileSizer.exists(entry.url),
+                  filter.allows(entry.url) else { continue }
             let lookup = entry.location == .launchAgents ? key : (entry.rawKey ?? key)
             let known = registered[key] ?? isRegistered(lookup)
             registered[key] = known

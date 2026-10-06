@@ -32,9 +32,9 @@ public enum UninstallLeftoverFinder {
 
         /// Confiança se `key` pertence a este app; nil se não.
         func ownership(_ key: String) -> UninstallConfidence? {
-            guard ownIDs.contains(where: { UninstallBundleID.isSame(key, orChildOf: $0) }),
+            guard ownIDs.contains(where: { claims($0, key) }),
                   let owner = UninstallBundleID.owner(of: key, among: allIDs), ownIDs.contains(owner) else { return nil }
-            if mainIsOwn, let mainID, UninstallBundleID.isSame(key, orChildOf: mainID) { return .high }
+            if mainIsOwn, let mainID, claims(mainID, key) { return .high }
             return .medium
         }
 
@@ -89,6 +89,12 @@ public enum UninstallLeftoverFinder {
         return results
     }
 
+    /// `key` é `id` ou filho dele. Um identificador curto ("com.foo") só vale idêntico: senão levaria
+    /// tudo do fabricante (com.foo.outroapp…) junto.
+    static func claims(_ id: String, _ key: String) -> Bool {
+        key == id || (id.split(separator: ".").count >= 3 && key.hasPrefix(id + "."))
+    }
+
     /// Restos de cada app, já filtrados (guarda + pastas ignoradas) e medidos.
     /// Apps que não podem ser removidos (Apple, o próprio) não têm restos procurados.
     @concurrent
@@ -104,7 +110,8 @@ public enum UninstallLeftoverFinder {
         for app in apps {
             result[app.url] = []
             guard app.canUninstall else { continue }
-            for item in match(app: app, in: index, installed: installed) where filter.allows(item.url) {
+            // O índice pode ser de antes de outra limpeza: o que já sumiu não entra.
+            for item in match(app: app, in: index, installed: installed) where FileSizer.exists(item.url) && filter.allows(item.url) {
                 pending.append((app.url, item))
             }
         }

@@ -122,7 +122,8 @@ private struct UninstallAppDetail: View {
     private func stats(leftoverBytes: Int64, isLoading: Bool) -> some View {
         GlassCard(padding: 16) {
             HStack(alignment: .top, spacing: 0) {
-                StatTile(title: "App", value: app.size.map(\.formattedBytes) ?? "medindo…", tint: Brand.red, symbol: "app")
+                StatTile(title: "App", value: app.size.map(\.formattedBytes) ?? (model.isMeasuring ? "medindo…" : "—"),
+                         tint: Brand.red, symbol: "app")
                     .frame(maxWidth: .infinity, alignment: .leading)
                 StatTile(title: "Restos", value: isLoading && leftoverBytes == 0 ? "…" : leftoverBytes.formattedBytes,
                          tint: Brand.magenta, symbol: "archivebox")
@@ -386,7 +387,7 @@ private struct UninstallBatchRow: View {
             Spacer(minLength: 8)
             if model.isRunning(app) { UninstallTag(text: "Aberto", symbol: "circle.fill", tint: Brand.green) }
             if app.canUninstall {
-                Text(app.size?.formattedBytes ?? "…")
+                Text(app.size?.formattedBytes ?? (model.isMeasuring ? "…" : "—"))
                     .font(.callout.monospacedDigit())
                     .foregroundStyle(.secondary)
             } else {
