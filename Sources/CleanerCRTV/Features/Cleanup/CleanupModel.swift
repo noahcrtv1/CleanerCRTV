@@ -69,6 +69,8 @@ final class CleanupModel: ScanningFeature {
 
     @ObservationIgnored private var scanTask: Task<Void, Never>?
     @ObservationIgnored private var trashTask: Task<Void, Never>?
+    /// Avisos de progresso atrasados de uma varredura anterior são descartados.
+    @ObservationIgnored private var scanGeneration = 0
 
     init() {}
 
@@ -108,6 +110,8 @@ final class CleanupModel: ScanningFeature {
         }
         isScanning = true
         progress = nil
+        scanGeneration += 1
+        let generation = scanGeneration
         let options = CleanupScanner.Options(
             runningBundleIDs: RunningApps.bundleIdentifiers,
             runningAppNames: Set(NSWorkspace.shared.runningApplications.compactMap(\.localizedName)),
@@ -115,9 +119,9 @@ final class CleanupModel: ScanningFeature {
         )
         let task = Task { [weak self] in
             let result = await CleanupScanner().scan(options) { progress in
-                Task { @MainActor in self?.receive(progress) }
+                Task { @MainActor in self?.receive(progress, generation: generation) }
             }
-            self?.finish(result)
+            self?.finish(result, hadFullDiskAccess: options.hasFullDiskAccess)
         }
         scanTask = task
         await task.value
@@ -127,19 +131,20 @@ final class CleanupModel: ScanningFeature {
         scanTask?.cancel()
     }
 
-    private func receive(_ progress: CleanupScanProgress) {
-        guard isScanning else { return }
+    private func receive(_ progress: CleanupScanProgress, generation: Int) {
+        guard isScanning, generation == scanGeneration else { return }
         self.progress = progress
     }
 
-    private func finish(_ result: CleanupScanResult) {
+    private func finish(_ result: CleanupScanResult, hadFullDiskAccess: Bool) {
         scanTask = nil
         isScanning = false
         progress = nil
         // Cancelada: o resultado anterior (se houver) continua valendo.
         guard !result.wasCancelled else { return }
         trashTask?.cancel()
-        inaccessibleCount = result.inaccessibleCount
+        // Com o acesso concedido, o que sobra ilegível é do sistema (dono root): o aviso não ajudaria.
+        inaccessibleCount = hadFullDiskAccess ? 0 : result.inaccessibleCount
         apply(result.entries)
         lastScan = Date()
     }
@@ -225,8 +230,11 @@ final class CleanupModel: ScanningFeature {
     func didRemove(_ report: RemovalReport) {
         let removed = report.removedSet
         guard !removed.isEmpty else { return }
+        let touchedTrash = results.first { $0.isTrash }?.entries.contains { removed.contains($0.url) } ?? false
         drop { removed.contains($0.url) }
-        if report.mode == .trash { refreshTrash() }
+        // Relê a Lixeira também depois de esvaziá-la: uma releitura ainda em andamento (de um "Limpar"
+        // anterior) poderia trazer de volta itens que acabaram de ser apagados.
+        if report.mode == .trash || touchedTrash { refreshTrash() }
     }
 
     /// "Ignorar sempre esta pasta": some da lista junto com o que estiver dentro dela.

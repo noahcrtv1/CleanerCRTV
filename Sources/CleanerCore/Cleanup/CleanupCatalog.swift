@@ -38,6 +38,7 @@ public enum CleanupCatalog {
         "com.apple.mediaanalysisd",       // análise de fotos e vídeos: caro de refazer
         "com.apple.appstoreagent",        // atualizações da App Store em andamento
         "com.apple.passwords",            // app Senhas
+        "com.apple.softwareupdate",       // atualizações do macOS sendo baixadas
         "com.lipenoe.cleanercrtv",        // o próprio app
     ]
 
@@ -57,9 +58,13 @@ public enum CleanupCatalog {
     ]
 
     /// Caminhos (relativos à pasta pessoal) que nunca viram item, nem dentro de uma pasta maior:
-    /// a pasta que os contém é dividida em filhos, como acontece com as pastas ignoradas.
+    /// a pasta que os contém é dividida em filhos, como acontece com as pastas ignoradas. `*` = qualquer subpasta.
     public static let protectedPaths: [String] = [
-        "Library/Caches/Google/DriveFS",   // Google Drive: envios pendentes
+        "Library/Caches/Google/DriveFS",            // Google Drive: envios pendentes
+        // Histórico local dos IDEs (JetBrains, Android Studio): versões antigas do código que você editou,
+        // não é cache. Fica na pasta de sistema do IDE, dentro de Caches.
+        "Library/Caches/JetBrains/*/LocalHistory",
+        "Library/Caches/Google/*/LocalHistory",
     ]
 
     /// Contêineres da Apple liberados. Os demais são de serviços e extensões do sistema: guardam estado de
@@ -75,6 +80,10 @@ public enum CleanupCatalog {
 
     static func acceptsContainer(_ id: String) -> Bool {
         let lower = id.lowercased()
+        // Extensões de sincronização (Dropbox, OneDrive, Google Drive…) guardam no cache arquivos ainda não enviados.
+        if lower.contains("fileprovider") || lower.contains("fpext") || lower.hasPrefix("com.google.drivefs") {
+            return false
+        }
         guard lower.hasPrefix("com.apple.") else { return true }
         return appleContainerAllowlist.contains(lower)
     }
@@ -203,7 +212,7 @@ public enum CleanupCatalog {
                                      note: tool.recommended ? nil : "Baixado de novo no próximo build"))
         }
         rules.append(CleanupRule("Library/Caches/JetBrains", .children, owner: .fixed(["com.jetbrains.*"]),
-                                 label: .fixed("JetBrains")))
+                                 label: .fixed("JetBrains"), splitsAroundClaims: true))
         return CleanupCategory(
             id: .developer, title: "Desenvolvimento",
             explanation: "Restos de builds e caches de ferramentas (Xcode, simuladores, SwiftPM, npm, Homebrew…). Tudo é gerado ou baixado de novo quando preciso. Arquivos do Xcode e suporte a versões antigas vêm desmarcados.",

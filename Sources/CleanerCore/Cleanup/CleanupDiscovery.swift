@@ -37,6 +37,8 @@ final class CleanupDiscovery {
 
     private(set) var inaccessible = Set<String>()
     /// Caminhos já reivindicados e todos os seus ancestrais (para achar quem "contém" um item reivindicado).
+    /// Chaves em minúsculas: o APFS ignora maiúsculas, e o caminho escrito numa regra (`com.apple.Safari`)
+    /// pode diferir do nome listado no disco (`com.apple.safari`) — sem isso o mesmo item sairia duas vezes.
     private var claimed = Set<String>()
     private var claimedAncestors = Set<String>()
     private var excludedAncestors = Set<String>()
@@ -50,10 +52,11 @@ final class CleanupDiscovery {
         self.options = options
         self.cancel = cancel
         self.onPath = onPath
-        self.excluded = excluded
+        // Ignorar a mais nunca é perigoso: compara sem maiúsculas, como o APFS.
+        self.excluded = excluded.map { $0.lowercased() }
         homePath = options.home.standardizedFileURL.path
         homeReal = SafetyGuard.realpathString(homePath) ?? homePath
-        for path in excluded { insertAncestors(of: path, into: &excludedAncestors) }
+        for path in self.excluded { insertAncestors(of: path, into: &excludedAncestors) }
     }
 
     /// Candidatos de todas as categorias pedidas, sem repetição e sem pai + filho.
@@ -79,7 +82,7 @@ final class CleanupDiscovery {
     /// Mesmo caminho ou dentro de um já reivindicado → fora. Contém um reivindicado (ou ignorado) →
     /// divide em filhos quando a regra permite; senão fica fora.
     func claim(_ candidate: CleanupCandidate, depth: Int) -> [CleanupCandidate] {
-        let path = candidate.path
+        let path = candidate.path.lowercased()
         if isInsideClaimed(path) { return [] }
         if claimedAncestors.contains(path) || excludedAncestors.contains(path) {
             guard candidate.rule.splitsAroundClaims, candidate.isDirectory, depth < Self.maxSplitDepth else { return [] }
@@ -110,6 +113,25 @@ final class CleanupDiscovery {
             // Se o pai já está, os avós também estão.
             if !set.insert(current).inserted { break }
             current = Self.parent(of: current)
+        }
+    }
+
+    /// Caminhos protegidos com `*` viram os caminhos que existem agora (links e arquivos também entram).
+    /// Os que não existem ficam de fora: senão a pasta-mãe seria dividida (ou descartada) à toa.
+    static func expandProtected(_ patterns: [String], home: URL) -> [String] {
+        let root = home.standardizedFileURL.path
+        return patterns.flatMap { pattern -> [String] in
+            var current = [root]
+            for component in pattern.split(separator: "/").map(String.init) {
+                if component == "*" {
+                    current = current.flatMap { dir in
+                        ((try? FileManager.default.contentsOfDirectory(atPath: dir)) ?? []).map { dir + "/" + $0 }
+                    }
+                } else {
+                    current = current.map { $0 + "/" + component }
+                }
+            }
+            return current.filter { FileSizer.exists(URL(fileURLWithPath: $0)) }
         }
     }
 
@@ -252,7 +274,7 @@ final class CleanupDiscovery {
     }
 
     private func isExcluded(_ path: String) -> Bool {
-        !excluded.isEmpty && Exclusions.isExcluded(path: path, in: excluded)
+        !excluded.isEmpty && Exclusions.isExcluded(path: path.lowercased(), in: excluded)
     }
 
     /// Suporte a dispositivos: fica a versão mais nova; as anteriores viram itens. Sem versão legível, nada sai.

@@ -173,6 +173,7 @@ struct CleanupRuleTests {
         try home.file("Library/Containers/com.spotify.client/Data/Library/Caches/WebKit/2")
         try home.file("Library/Containers/com.spotify.client/Data/Documents/importante.txt")
         try home.file("Library/Containers/com.apple.siri.media-indexer/Data/Library/Caches/x/1")
+        try home.file("Library/Containers/com.getdropbox.dropbox.fileprovider/Data/Library/Caches/pendente/1")
 
         let result = await home.scan(home.options())
         let base = "Library/Containers/com.spotify.client/Data/Library/Caches"
@@ -183,6 +184,7 @@ struct CleanupRuleTests {
         #expect(!result.has("Library/Containers/com.spotify.client", in: home), "nunca o contêiner")
         #expect(!result.entries.contains { $0.url.path.contains("Documents") })
         #expect(!result.entries.contains { $0.url.path.contains("com.apple.siri") }, "serviços da Apple ficam de fora")
+        #expect(!result.entries.contains { $0.url.path.contains("fileprovider") }, "sincronização fica de fora")
     }
 
     @Test func developerOptionalItemsStartUnselected() async throws {
@@ -313,6 +315,45 @@ struct CleanupOverlapTests {
         #expect(!result.entries.contains { $0.url.path.contains("DriveFS") }, "Google Drive nunca entra")
         #expect(!result.has("Library/Caches/Google", in: home))
         #expect(result.has("Library/Caches/Google/Outro", in: home))
+    }
+
+    @Test func ideLocalHistoryIsNeverListed() async throws {
+        let home = try CleanupFakeHome()
+        try home.file("Library/Caches/JetBrains/IntelliJIdea2026.1/caches/1")
+        try home.file("Library/Caches/JetBrains/IntelliJIdea2026.1/LocalHistory/changes.storageData")
+        try home.file("Library/Caches/Google/AndroidStudio2026.1/caches/2")
+        try home.file("Library/Caches/Google/AndroidStudio2026.1/LocalHistory/changes.storageData")
+
+        let result = await home.scan(home.options())
+        #expect(!result.entries.contains { $0.url.path.contains("LocalHistory") }, "histórico local não é cache")
+        #expect(!result.has("Library/Caches/JetBrains/IntelliJIdea2026.1", in: home), "a pasta do IDE é dividida")
+        let jetbrains = try #require(result.entry("Library/Caches/JetBrains/IntelliJIdea2026.1/caches", in: home))
+        #expect(jetbrains.category == .developer)
+        #expect(jetbrains.detail == "IntelliJIdea2026.1/caches")
+        #expect(result.entry("Library/Caches/Google/AndroidStudio2026.1/caches", in: home)?.category == .appCaches)
+        #expect(!result.has("Library/Caches/Google/AndroidStudio2026.1", in: home))
+    }
+
+    @Test func claimsIgnoreLetterCase() async throws {
+        let home = try CleanupFakeHome()
+        try home.file("Library/Caches/com.apple.safari/WebKitCache/1")
+        // Só faz sentido num volume que ignora maiúsculas (o padrão do APFS no Mac).
+        guard FileManager.default.fileExists(atPath: home.url("Library/Caches/com.apple.Safari").path) else { return }
+
+        let result = await home.scan(home.options())
+        let safari = result.entries.filter { $0.url.path.lowercased().hasSuffix("library/caches/com.apple.safari") }
+        #expect(safari.count == 1, "o mesmo item uma vez só: \(safari.map(\.url.path))")
+        #expect(safari.first?.category == .browsers)
+    }
+
+    @Test func protectedPatternsExpandToRealFolders() throws {
+        let home = try CleanupFakeHome()
+        try home.file("Library/Caches/JetBrains/A/LocalHistory/1")
+        try home.file("Library/Caches/JetBrains/B/caches/1")
+        let paths = CleanupDiscovery.expandProtected(["Library/Caches/JetBrains/*/LocalHistory", "Fixo/Caminho"],
+                                                     home: home.root)
+        let root = home.root.standardizedFileURL.path
+        #expect(paths == [root + "/Library/Caches/JetBrains/A/LocalHistory"], "só o que existe")
     }
 
     @Test func itemsTheGuardWouldBlockAreNeverProposed() async throws {

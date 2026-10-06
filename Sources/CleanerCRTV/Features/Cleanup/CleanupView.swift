@@ -40,8 +40,15 @@ struct CleanupView: View {
                     ContentUnavailableView {
                         Label("Tudo limpo", systemImage: "sparkles")
                     } description: {
-                        Text("Não sobrou cache, registro nem resto de instalação para limpar. Volte daqui a alguns dias.")
+                        if model.inaccessibleCount > 0 {
+                            Text("Nada para limpar nas pastas que o app consegue ler. Com Acesso Total ao Disco, caches de outros apps, Safari, Mail e a Lixeira também entram.")
+                        } else {
+                            Text("Não sobrou cache, registro nem resto de instalação para limpar. Volte daqui a alguns dias.")
+                        }
                     } actions: {
+                        if model.inaccessibleCount > 0 {
+                            Button("Abrir Ajustes", action: app.openFullDiskAccessSettings)
+                        }
                         Button("Escanear de novo", action: startScan)
                             .buttonStyle(.gradient)
                     }
@@ -224,7 +231,7 @@ private struct CleanupCategoryRow: View {
         if result.isTrash { return "\(CleanupFormat.items(count)) · esvazie à parte" }
         let selected = model.selectedPerCategory[result.id] ?? 0
         if selected == count { return CleanupFormat.items(count) }
-        return "\(selected) de \(count) marcados"
+        return "\(CleanupFormat.number(selected)) de \(CleanupFormat.number(count)) marcados"
     }
 
     private func focus() {
@@ -524,8 +531,12 @@ private enum CleanupFormat {
         path.hasPrefix(home + "/") ? "~" + path.dropFirst(home.count) : path
     }
 
+    static func number(_ value: Int) -> String {
+        value.formatted(.number.locale(Locale(identifier: "pt_BR")))
+    }
+
     static func items(_ count: Int) -> String {
-        "\(count.formatted(.number.locale(Locale(identifier: "pt_BR")))) \(count == 1 ? "item" : "itens")"
+        "\(number(count)) \(count == 1 ? "item" : "itens")"
     }
 
     static let relative = Date.RelativeFormatStyle(presentation: .named, locale: Locale(identifier: "pt_BR"))

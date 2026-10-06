@@ -67,12 +67,12 @@ public struct CleanupScanner: Sendable {
     private func run(_ options: Options, flag: CleanupCancelFlag, gate: CleanupProgressGate,
                      progress: @escaping @Sendable (CleanupScanProgress) -> Void) async -> CleanupScanResult {
         let catalog = self.catalog
-        let protected = CleanupCatalog.protectedPaths.map { options.home.appendingPathComponent($0).path }
-        let excluded = ((options.excludedPaths ?? Exclusions.paths) + protected)
-            .map { URL(fileURLWithPath: $0).standardizedFileURL.path }
 
         // Fase 1: descoberta (rápida, só lista pastas).
         let (candidates, inaccessible) = await Self.offload { () -> ([CleanupCandidate], [String]) in
+            let protected = CleanupDiscovery.expandProtected(CleanupCatalog.protectedPaths, home: options.home)
+            let excluded = ((options.excludedPaths ?? Exclusions.paths) + protected)
+                .map { URL(fileURLWithPath: $0).standardizedFileURL.path }
             let discovery = CleanupDiscovery(options: options, excluded: excluded, cancel: flag) { path in
                 if gate.shouldEmit() {
                     progress(CleanupScanProgress(stage: .discovering, currentPath: path, measured: 0, total: 0,
