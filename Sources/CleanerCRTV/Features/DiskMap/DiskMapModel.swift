@@ -70,7 +70,8 @@ final class DiskMapModel: ScanningFeature {
 
     @ObservationIgnored private var scanTask: Task<Void, Never>?
     @ObservationIgnored private var activeProgress: DiskMapProgress?
-    @ObservationIgnored private var verdicts: [ObjectIdentifier: DiskMapRemovability] = [:]
+    /// Guarda o nó junto: enquanto está no cache, o endereço não é reaproveitado por outro nó.
+    @ObservationIgnored private var verdicts: [ObjectIdentifier: (node: DiskMapNode, verdict: DiskMapRemovability)] = [:]
     @ObservationIgnored private var observers: [NSObjectProtocol] = []
 
     var badge: String? { nil }
@@ -105,7 +106,8 @@ final class DiskMapModel: ScanningFeature {
         let progress = DiskMapProgress()
         activeProgress = progress
         self.progress = .init()
-        if case .volume(let url) = target { expectedBytes = VolumeUsage.of(url).used } else { expectedBytes = nil }
+        // Usa o valor já lido em segundo plano: um volume de rede lento não trava a tela.
+        if case .volume(let url) = target { expectedBytes = volumes.first { $0.url == url }?.used } else { expectedBytes = nil }
         isScanning = true
         hovered = nil
         zoom = nil
@@ -276,8 +278,9 @@ final class DiskMapModel: ScanningFeature {
         expanding.insert(key)
         let names = Set(directory.children.filter { !$0.isAggregate && !$0.isSynthetic }.map(\.name))
         let path = directory.path
+        let keepLink = tree.linkFilter(for: directory)
         Task { [weak self] in
-            let files = await DiskMapScanner.listFiles(inDirectoryAt: path, skipping: names)
+            let files = await DiskMapScanner.listFiles(inDirectoryAt: path, skipping: names, keepLink: keepLink)
             guard let self else { return }
             self.expanding.remove(key)
             guard self.tree === tree, tree.contains(directory) else { return }
@@ -287,6 +290,10 @@ final class DiskMapModel: ScanningFeature {
             }
             tree.replaceAggregate(in: directory, with: files)
             self.listSelection = self.listSelection.filter { tree.contains($0) }
+            if let leaf = self.leaf, !tree.contains(leaf) { self.leaf = nil }
+            self.verdicts = [:]
+            // Uma pasta coletada pode ter mudado de tamanho com a leitura nova.
+            self.syncCollected()
             self.refreshFocus()
         }
     }
@@ -297,9 +304,9 @@ final class DiskMapModel: ScanningFeature {
     func removability(_ node: DiskMapNode) -> DiskMapRemovability {
         guard let tree else { return .blocked("Sem mapa") }
         let key = ObjectIdentifier(node)
-        if let cached = verdicts[key] { return cached }
+        if let cached = verdicts[key], cached.node === node { return cached.verdict }
         let verdict = tree.removability(of: node)
-        verdicts[key] = verdict
+        verdicts[key] = (node, verdict)
         return verdict
     }
 
@@ -348,16 +355,21 @@ final class DiskMapModel: ScanningFeature {
     }
 
     /// Itens da coleta conferidos agora (o disco pode ter mudado desde a varredura).
-    func removalBatch() -> (items: [RemovalItem], nodes: [URL: DiskMapNode]) {
+    /// `skipped` conta os que deixaram de poder sair (ficam na lista, marcados).
+    func removalBatch() -> (items: [RemovalItem], nodes: [URL: DiskMapNode], skipped: Int) {
         var items: [RemovalItem] = []
         var nodes: [URL: DiskMapNode] = [:]
+        var skipped = 0
         for node in collected {
             verdicts[ObjectIdentifier(node)] = nil
-            guard let url = removability(node).url else { continue }
+            guard let url = removability(node).url, nodes[url] == nil else {
+                skipped += 1
+                continue
+            }
             items.append(RemovalItem(url: url, size: node.size))
             nodes[url] = node
         }
-        return (items, nodes)
+        return (items, nodes, skipped)
     }
 
     /// Tira da árvore o que o `Remover` levou e desconta dos totais.

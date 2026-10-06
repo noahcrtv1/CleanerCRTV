@@ -130,7 +130,8 @@ enum DiskMapDirectoryReader {
     }
 
     /// Lê os arquivos (não pastas) de uma pasta. Usado para abrir o grupo "N arquivos menores".
-    static func listFiles(atPath path: String, skipping names: Set<String>, excluded: Set<String>) -> [DiskMapNode]? {
+    static func listFiles(atPath path: String, skipping names: Set<String>, excluded: Set<String>,
+                          keepLink: (UInt64) -> Bool = { _ in true }) -> [DiskMapNode]? {
         let fd = open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
         guard fd >= 0 else { return nil }
         defer { close(fd) }
@@ -142,6 +143,7 @@ enum DiskMapDirectoryReader {
             guard entry.error == 0, !entry.isDirectory, let raw = entry.name else { return }
             let name = String(cString: raw)
             guard !names.contains(name), !excluded.contains(prefix + name) else { return }
+            if entry.isRegularFile, entry.linkCount > 1, !keepLink(entry.fileID) { return }
             var flags: DiskMapNode.Flags = []
             if entry.isSymlink { flags.insert(.symlink) }
             files.append(DiskMapNode(name: name, flags: flags, size: max(0, entry.allocatedSize),

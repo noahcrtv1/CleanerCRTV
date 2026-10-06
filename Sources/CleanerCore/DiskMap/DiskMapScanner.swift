@@ -96,12 +96,15 @@ public enum DiskMapScanner {
     }
 
     /// Lista os arquivos de uma pasta (para abrir o grupo "N arquivos menores"). nil = sem acesso.
+    /// `keepLink` decide se um link físico entra (ele só conta na pasta onde a varredura o somou).
     public static func listFiles(inDirectoryAt path: String, skipping names: Set<String>,
-                                 excludedPaths: [String] = Exclusions.paths) async -> [DiskMapNode]? {
+                                 excludedPaths: [String] = Exclusions.paths,
+                                 keepLink: @escaping @Sendable (UInt64) -> Bool = { _ in true }) async -> [DiskMapNode]? {
         let excluded = Set(excludedPaths + excludedPaths.filter { $0.hasPrefix("/") }.map { DiskMapPaths.dataVolumePrefix + $0 })
         return await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
-                continuation.resume(returning: DiskMapDirectoryReader.listFiles(atPath: path, skipping: names, excluded: excluded))
+                continuation.resume(returning: DiskMapDirectoryReader.listFiles(atPath: path, skipping: names, excluded: excluded,
+                                                                                  keepLink: keepLink))
             }
         }
     }
@@ -129,11 +132,13 @@ public enum DiskMapScanner {
         let root = DiskMapNode(name: rootPath, flags: [.directory])
         var info = stat()
         var restricted = 0
+        var owners: [UInt64: ObjectIdentifier] = [:]
         if lstat(rootPath, &info) == 0, (info.st_mode & S_IFMT) == S_IFDIR {
             let walker = DiskMapWalker(root: root, rootPath: rootPath, device: info.st_dev, options: options,
                                        progress: progress, rootSkips: rootSkips)
             walker.run(concurrency: options.concurrency)
             restricted = walker.restrictedCount
+            owners = walker.hardLinkOwners
         } else {
             root.flags.insert(.restricted)
             restricted = 1
@@ -141,7 +146,8 @@ public enum DiskMapScanner {
         finalize(root)
         return DiskMapTree(root: root, kind: kind, title: title, isPartial: progress.isCancelled,
                            smallFileThreshold: options.smallFileThreshold,
-                           duration: Date().timeIntervalSince(start), restrictedCount: restricted)
+                           duration: Date().timeIntervalSince(start), restrictedCount: restricted,
+                           hardLinkOwners: owners)
     }
 
     /// Fecha as contas de baixo para cima: cria os grupos de arquivos menores, soma e ordena.
@@ -199,7 +205,8 @@ final class DiskMapWalker: @unchecked Sendable {
     private var active = 0
 
     private let linkLock = NSLock()
-    private var seenLinks = Set<UInt64>()
+    /// Link físico → pasta onde ele foi contado (a única que o mostra ao abrir os arquivos menores).
+    private var linkOwners: [UInt64: ObjectIdentifier] = [:]
     private var restricted = 0
 
     init(root: DiskMapNode, rootPath: String, device: dev_t, options: DiskMapScanOptions,
@@ -217,6 +224,7 @@ final class DiskMapWalker: @unchecked Sendable {
     }
 
     var restrictedCount: Int { linkLock.withLock { restricted } }
+    var hardLinkOwners: [UInt64: ObjectIdentifier] { linkLock.withLock { linkOwners } }
 
     func run(concurrency: Int) {
         DispatchQueue.concurrentPerform(iterations: concurrency) { _ in worker() }
@@ -274,9 +282,13 @@ final class DiskMapWalker: @unchecked Sendable {
         linkLock.withLock { restricted += 1 }
     }
 
-    /// Link físico: só a primeira ocorrência conta.
-    private func firstSighting(of fileID: UInt64) -> Bool {
-        linkLock.withLock { seenLinks.insert(fileID).inserted }
+    /// Link físico: só a primeira ocorrência conta (e fica registrada na pasta dela).
+    private func firstSighting(of fileID: UInt64, in directory: DiskMapNode) -> Bool {
+        linkLock.withLock {
+            guard linkOwners[fileID] == nil else { return false }
+            linkOwners[fileID] = ObjectIdentifier(directory)
+            return true
+        }
     }
 
     private func process(_ job: Job, buffer: UnsafeMutableRawPointer, capacity: Int) -> [Job] {
@@ -323,7 +335,7 @@ final class DiskMapWalker: @unchecked Sendable {
                 return
             }
             if checkExcluded, excluded.contains(prefix + String(cString: rawName)) { return }
-            if entry.isRegularFile, entry.linkCount > 1, !firstSighting(of: entry.fileID) { return }
+            if entry.isRegularFile, entry.linkCount > 1, !firstSighting(of: entry.fileID, in: node) { return }
             let size = max(0, entry.allocatedSize)
             let logical = max(0, entry.logicalSize)
             files += 1

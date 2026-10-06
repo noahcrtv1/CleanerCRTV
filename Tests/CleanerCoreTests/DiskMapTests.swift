@@ -148,6 +148,27 @@ struct DiskMapTests {
         #expect(tree.root.fileCount == 1)
     }
 
+    @Test func expandingSmallFilesCountsHardLinksOnce() async throws {
+        let fixture = try DiskMapFixture()
+        let original = try fixture.file("a/original.txt", bytes: 50_000)
+        try fixture.file("a/outro.txt", bytes: 1_000)
+        try fixture.file("b/solto.txt", bytes: 1_000)
+        #expect(link(original.path, fixture.path("b/gemeo.txt")) == 0)
+        let tree = await fixture.scan()
+        let (size, files) = (tree.root.size, tree.root.fileCount)
+        var listedLinks = 0
+        for name in ["a", "b"] {
+            let folder = try #require(tree.root.child(named: name))
+            let listed = try #require(await DiskMapScanner.listFiles(inDirectoryAt: folder.path, skipping: [], excludedPaths: [],
+                                                                    keepLink: tree.linkFilter(for: folder)))
+            listedLinks += listed.filter { $0.name == "original.txt" || $0.name == "gemeo.txt" }.count
+            tree.replaceAggregate(in: folder, with: listed)
+        }
+        #expect(listedLinks == 1)
+        #expect(tree.root.size == size && tree.root.fileCount == files)
+        checkInvariants(tree.root)
+    }
+
     @Test func symlinksAreNotFollowed() async throws {
         let outside = try DiskMapFixture()
         let target = try outside.file("alvo.bin", bytes: 5_000_000)
@@ -325,6 +346,36 @@ struct DiskMapTests {
 
         tree.remove(big)
         #expect(tree.removability(of: big).reason != nil)
+    }
+
+    @Test func removabilityBlocksUnmeasuredCloudAndPackageContents() async throws {
+        guard getuid() != 0 else { return }
+        let base = Paths.home.appendingPathComponent(".cleanercrtv-diskmap-tests-pkg", isDirectory: true)
+        let fixture = try DiskMapFixture(base: base)
+        defer { try? FileManager.default.removeItem(at: base) }
+        try fixture.file("Foto.photoslibrary/originals/a.heic", bytes: 1_200_000)
+        try fixture.file("trancada/x.bin", bytes: 10)
+        try fixture.folder("nuvem")
+        #expect(chmod(fixture.path("trancada"), 0o000) == 0)
+        defer { chmod(fixture.path("trancada"), 0o755) }
+        let tree = await fixture.scan()
+
+        // O pacote inteiro pode sair; as peças de dentro, não.
+        let library = try #require(tree.root.child(named: "Foto.photoslibrary"))
+        #expect(library.isPackage)
+        #expect(tree.removability(of: library).url != nil)
+        let inner = try #require(library.child(named: "originals"))
+        #expect(tree.removability(of: inner).reason != nil)
+        let photo = try #require(tree.node(atPath: fixture.path("Foto.photoslibrary/originals/a.heic")))
+        #expect(tree.removability(of: photo).reason != nil)
+
+        let locked = try #require(tree.root.child(named: "trancada"))
+        #expect(locked.isRestricted && tree.removability(of: locked).reason != nil)
+
+        let cloud = try #require(tree.root.child(named: "nuvem"))
+        #expect(tree.removability(of: cloud).url != nil)
+        cloud.flags.insert(.dataless)
+        #expect(tree.removability(of: cloud).reason != nil)
     }
 
     // MARK: - Raios de sol

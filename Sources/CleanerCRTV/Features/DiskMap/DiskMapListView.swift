@@ -300,6 +300,7 @@ struct DiskMapListView: View {
     private func rowColor(_ node: DiskMapNode) -> Color {
         if node.isAggregate { return DiskMapPalette.smallFiles }
         if node.isSynthetic { return DiskMapPalette.system }
+        if node.isRestricted { return DiskMapPalette.restricted }
         if let index = map.layout?.arcIndex(of: node), let arc = map.layout?.arcs[index] {
             return DiskMapPalette.color(for: arc)
         }

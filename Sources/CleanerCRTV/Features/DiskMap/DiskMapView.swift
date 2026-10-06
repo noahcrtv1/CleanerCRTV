@@ -266,6 +266,8 @@ private struct DiskMapLeafDetail: View {
     let map: DiskMapModel
     let node: DiskMapNode
 
+    @Environment(AppModel.self) private var app
+
     var body: some View {
         VStack(spacing: 12) {
             DiskMapNodeIcon(map: map, node: node, size: 72)
@@ -283,6 +285,13 @@ private struct DiskMapLeafDetail: View {
             }
             if node.isAggregate {
                 Text(DiskMapFormat.files(node.fileCount)).font(.caption).foregroundStyle(.secondary)
+                if let parent = node.parent {
+                    Button("Mostrar um por um") {
+                        map.expandSmallFiles(in: parent) { app.showToast($0, symbol: "exclamationmark.triangle.fill", isError: true) }
+                    }
+                    .controlSize(.small)
+                    .disabled(map.expanding.contains(ObjectIdentifier(parent)))
+                }
             }
             if let url = map.revealURL(node) {
                 HStack {
@@ -366,6 +375,12 @@ struct DiskMapCollectorBar: View {
                                 .truncationMode(.middle)
                         }
                         Spacer()
+                        if let reason = map.removability(node).reason {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundStyle(Brand.orange)
+                                .help("Ficará de fora: \(reason)")
+                                .accessibilityLabel("Ficará de fora: \(reason)")
+                        }
                         SizeText(bytes: node.size).font(.callout.monospacedDigit())
                         Button {
                             map.uncollect(node)
@@ -396,8 +411,11 @@ struct DiskMapCollectorBar: View {
             app.showToast("Os itens da lista não podem mais ser removidos.", symbol: "exclamationmark.triangle.fill", isError: true)
             return
         }
+        let note = batch.skipped == 0 ? nil
+            : "\(batch.skipped) \(batch.skipped == 1 ? "item da lista mudou e ficou" : "itens da lista mudaram e ficaram") de fora."
         app.requestRemoval(batch.items, source: Feature.diskMap.title,
-                           title: "Remover \(batch.items.count) \(batch.items.count == 1 ? "item" : "itens") do mapa?") { report in
+                           title: "Remover \(batch.items.count) \(batch.items.count == 1 ? "item" : "itens") do mapa?",
+                           note: note) { report in
             map.applyRemoval(report, nodes: batch.nodes)
         }
     }

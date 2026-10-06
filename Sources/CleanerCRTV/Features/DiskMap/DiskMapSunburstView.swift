@@ -13,6 +13,7 @@ enum DiskMapPalette {
     static let smallFiles = Color(white: 0.62)
     static let merged = Color(white: 0.52).opacity(0.75)
     static let system = Color(white: 0.4)
+    static let restricted = Color(white: 0.46)
 
     static func color(branch: Int, depth: Int) -> Color {
         guard branch >= 0 else { return merged }
@@ -124,14 +125,15 @@ struct DiskMapSunburstRenderer {
             for pass in passes {
                 for (index, arc) in pass.layout.arcs.enumerated() {
                     guard let sector = sector(for: arc, in: pass, geometry) else { continue }
-                    var color = DiskMapPalette.color(for: arc)
+                    let restricted = arc.node?.isRestricted == true
+                    var color = restricted ? DiskMapPalette.restricted : DiskMapPalette.color(for: arc)
                     var alpha = pass.alpha
                     if !animating {
                         if let hovered, index == highlight || arc.isInside(hovered) { color = color.mix(with: .white, by: 0.25) }
                         if !collected.isEmpty, isCollected(arc) { alpha *= 0.25 }
                     }
                     layer.fill(sector.path, with: .color(color.opacity(alpha)), style: FillStyle(eoFill: true))
-                    if arc.kind == .synthetic { hatch(&layer, sector.path, alpha: alpha) }
+                    if arc.kind == .synthetic || restricted { hatch(&layer, sector.path, alpha: alpha) }
                     if sector.cut { cuts.addPath(sector.outline) }
                 }
             }
@@ -355,7 +357,13 @@ struct DiskMapSunburstView: View {
         switch arc.kind {
         case .directory:
             guard let node = arc.node else { return }
-            if node.isNavigable, !node.children.isEmpty { map.open(node) } else { map.listSelection = [node] }
+            if node.isNavigable, !node.children.isEmpty {
+                map.open(node)
+            } else {
+                // Pasta vazia ou sem acesso: mostra na lista da pasta que a contém.
+                if arc.parent !== map.focus { map.open(arc.parent) }
+                map.listSelection = [node]
+            }
         case .file, .synthetic:
             if let node = arc.node {
                 if arc.parent !== map.focus { map.open(arc.parent) }
