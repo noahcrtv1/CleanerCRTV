@@ -385,6 +385,43 @@ struct LargeOldScannerTests {
         #expect(problem(URL(fileURLWithPath: "/Users")) != nil)
     }
 
+    @Test func refusesRootsInsideContainers() async throws {
+        let tree = try LargeOldTestTree()
+        defer { tree.remove() }
+        try tree.file("Disco.sparsebundle/bands/0", bytes: big)
+        try tree.file("Fotos.photoslibrary/originals/a.heic", bytes: 10)
+        try tree.file("Ferramenta.qwzx/Contents/Info.plist", bytes: 10)
+        try tree.file("Ferramenta.qwzx/Contents/Resources/x.dat", bytes: 10)
+        try tree.file("Lixo/.Trash/velho.mov", bytes: 10)
+        try tree.file("web/node_modules/pacote/x.js", bytes: 10)
+        try tree.file("Projeto.v2/render.mov", bytes: 10)
+
+        func problem(_ relative: String) -> String? {
+            LargeOldScanner.rootProblem(tree.root.appendingPathComponent(relative), home: tree.root, exclusions: [])
+        }
+        #expect(problem("Disco.sparsebundle/bands") != nil, "fatias soltas de uma imagem de disco")
+        #expect(problem("Disco.sparsebundle") != nil)
+        #expect(problem("Fotos.photoslibrary/originals") != nil)
+        #expect(problem("Ferramenta.qwzx/Contents/Resources") != nil)
+        #expect(problem("Lixo/.Trash") != nil)
+        #expect(problem("web/node_modules/pacote") != nil)
+        #expect(problem("Projeto.v2") == nil, "pasta comum com ponto no nome")
+
+        var options = tree.options(minSize: minSize)
+        options.root = tree.root.appendingPathComponent("Disco.sparsebundle/bands")
+        #expect(await LargeOldScanner.scan(options).isEmpty)
+    }
+
+    @Test func packageWithIgnoredInsideIsNotListed() async throws {
+        let tree = try LargeOldTestTree()
+        defer { tree.remove() }
+        try tree.file("Disco.sparsebundle/bands/0", bytes: big)
+        try tree.file("Notas.rtfd/foto.jpg", bytes: big)
+        let ignored = tree.root.appendingPathComponent("Disco.sparsebundle/bands").path
+        let files = await LargeOldScanner.scan(tree.options(minSize: minSize, exclusions: [ignored]))
+        #expect(files.map(\.name) == ["Notas.rtfd"])
+    }
+
     @Test func volumesNeverIncludeTheStartupDisk() {
         let volumes = LargeOldScanner.scannableVolumes()
         #expect(volumes.allSatisfy { $0.url.path.hasPrefix("/Volumes/") })

@@ -123,8 +123,49 @@ public enum LargeOldScanner {
             return "Essa pasta está na lista de pastas ignoradas (Ajustes ▸ Ignorar)."
         }
         guard rules.isPathAllowed(path) else { return "Essa pasta é protegida e não pode ser analisada." }
+        if let problem = containerProblem(path, home: home) { return problem }
         if (try? URL(fileURLWithPath: path).resourceValues(forKeys: [.volumeIsReadOnlyKey]))?.volumeIsReadOnly == true {
             return "Esse disco é somente leitura: nada nele pode ser removido."
+        }
+        return nil
+    }
+
+    /// A varredura nunca abre Lixeira, bibliotecas, apps nem pacotes: a raiz também não pode estar dentro deles
+    /// (senão as peças de dentro, como as fatias de um .sparsebundle, apareceriam soltas para remover).
+    static func containerProblem(_ path: String, home: String) -> String? {
+        // Só olha abaixo da área (pasta pessoal, /Users/Shared ou /Volumes/X).
+        let base: String
+        if path == home || path.hasPrefix(home + "/") {
+            base = home
+        } else if path.hasPrefix("/Volumes/") {
+            let parts = path.split(separator: "/", maxSplits: 2, omittingEmptySubsequences: true)
+            base = parts.count >= 2 ? "/Volumes/" + parts[1] : path
+        } else {
+            base = "/Users/Shared"
+        }
+        guard path.count > base.count, path.hasPrefix(base + "/") else { return nil }
+        var current = base
+        for name in path.dropFirst(base.count + 1).split(separator: "/") {
+            current += "/" + name
+            if name == ".Trash" || name == ".Trashes" || name == "$RECYCLE.BIN" {
+                return "A Lixeira fica de fora: esvazie pelo Finder ou pelo Lixo do sistema."
+            }
+            if skippedFolderNames.contains(String(name)) {
+                return "Essa pasta guarda dependências ou backups e fica de fora."
+            }
+            let ext = LargeOldRules.pathExtension(of: name)
+            guard !ext.isEmpty else { continue }
+            if libraryExtensions.contains(ext) {
+                return "Bibliotecas de apps (Fotos, Música, iMovie…) ficam de fora: organize pelo próprio app."
+            }
+            var st = stat()
+            if LargeOldWorker.packageKind(ext) == .code || lstat(current + "/Contents/Info.plist", &st) == 0 {
+                return "Apps e plug-ins ficam de fora: para removê-los, use o Desinstalador."
+            }
+            let isPackage = (try? URL(fileURLWithPath: current).resourceValues(forKeys: [.isPackageKey]))?.isPackage == true
+            if LargeOldWorker.packageKind(ext) == .document || isPackage {
+                return "Essa pasta fica dentro de um pacote. Escolha a pasta onde ele está."
+            }
         }
         return nil
     }
@@ -446,7 +487,7 @@ final class LargeOldWorker {
         let ext = LargeOldRules.pathExtension(of: name)
         guard !ext.isEmpty else { return .descend }
         if LargeOldScanner.libraryExtensions.contains(ext) { return .skip }
-        switch packageKind(ext) {
+        switch cachedPackageKind(ext) {
         case .code: return .skip
         case .document: return .package
         case .none:
@@ -456,26 +497,20 @@ final class LargeOldWorker {
         }
     }
 
-    private func packageKind(_ ext: String) -> LargeOldPackageKind {
+    private func cachedPackageKind(_ ext: String) -> LargeOldPackageKind {
         if let cached = packageCache[ext] { return cached }
-        let kind: LargeOldPackageKind
-        if LargeOldScanner.codeBundleExtensions.contains(ext) {
-            kind = .code
-        } else if LargeOldScanner.documentPackageExtensions.contains(ext) {
-            kind = .document
-        } else if let type = UTType(filenameExtension: ext, conformingTo: .directory), !type.isDynamic {
-            if type.conforms(to: .bundle) || type.conforms(to: .application) || type.conforms(to: .framework) {
-                kind = .code
-            } else if type.conforms(to: .package) {
-                kind = .document
-            } else {
-                kind = .none
-            }
-        } else {
-            kind = .none
-        }
+        let kind = Self.packageKind(ext)
         packageCache[ext] = kind
         return kind
+    }
+
+    /// Pasta com esta extensão (minúscula) é app/bundle de código, pacote de documento ou pasta comum?
+    static func packageKind(_ ext: String) -> LargeOldPackageKind {
+        if LargeOldScanner.codeBundleExtensions.contains(ext) { return .code }
+        if LargeOldScanner.documentPackageExtensions.contains(ext) { return .document }
+        guard let type = UTType(filenameExtension: ext, conformingTo: .directory), !type.isDynamic else { return .none }
+        if type.conforms(to: .bundle) || type.conforms(to: .application) || type.conforms(to: .framework) { return .code }
+        return type.conforms(to: .package) ? .document : .none
     }
 
     private func kind(forExtension ext: String, isDirectory: Bool) -> LargeOldKind {
@@ -512,7 +547,9 @@ final class LargeOldWorker {
 
     private func considerPackage(_ path: String, st: stat) {
         let url = URL(fileURLWithPath: path, isDirectory: true)
-        guard SafetyGuard.check(url).isAllowed else { return }
+        // Remover o pacote levaria junto algo que o usuário mandou ignorar.
+        guard SafetyGuard.check(url).isAllowed,
+              !rules.exclusions.contains(where: { $0.hasPrefix(path + "/") }) else { return }
         let context = context
         let size = FileSizer.allocatedSize(of: url, isCancelled: { context.isCancelled })
         guard size >= minSize, !context.isCancelled else { return }
