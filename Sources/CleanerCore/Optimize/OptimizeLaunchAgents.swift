@@ -106,6 +106,9 @@ public struct OptimizeLaunchAgent: Sendable, Hashable, Identifiable {
     public var owner: OptimizeOwnerApp?
     /// Pode ir para a remoção (agente do usuário e liberado pelo SafetyGuard).
     public var isRemovable = false
+    /// Agente do usuário com o mesmo rótulo de um de /Library. O launchd carrega o de /Library e as
+    /// marcas de ativado/desativado valem por rótulo: mexer neste mexeria no outro.
+    public var sharesLabelWithSystemAgent = false
 
     public init(url: URL, scope: OptimizeAgentScope, label: String, program: String? = nil, arguments: [String] = [],
                 runAtLoad: Bool = false, keepAlive: OptimizeKeepAlive = .no, startInterval: Int? = nil,
@@ -131,6 +134,8 @@ public struct OptimizeLaunchAgent: Sendable, Hashable, Identifiable {
     public var isBroken: Bool { problem != nil }
     public var isRunning: Bool { pid != nil }
     public var isManageable: Bool { scope.isManageable && problem != .invalidPlist && OptimizeLaunchctl.isValidLabel(label) }
+    /// Ativar/desativar sem afetar nenhum agente de /Library.
+    public var canToggle: Bool { isManageable && !sharesLabelWithSystemAgent }
     public var displayName: String { owner?.name ?? label }
 
     /// Caminho absoluto do programa, quando há um.
@@ -353,15 +358,16 @@ public enum OptimizeAgentScanner {
         var agents: [OptimizeLaunchAgent] = []
         for source in sources {
             guard !isExcluded(source.directory),
-                  let files = try? fm.contentsOfDirectory(at: source.directory, includingPropertiesForKeys: [.fileSizeKey, .isRegularFileKey],
+                  let files = try? fm.contentsOfDirectory(at: source.directory, includingPropertiesForKeys: [.isSymbolicLinkKey],
                                                           options: [.skipsHiddenFiles])
             else { continue }
             for file in files.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
                 if isCancelled() { return agents }
                 guard file.pathExtension.lowercased() == "plist", !isExcluded(file) else { continue }
-                let values = try? file.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey])
+                // O destino de um link também precisa ser arquivo comum: ler um FIFO ou /dev/zero travaria.
+                let values = try? file.resolvingSymlinksInPath().resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey])
                 // Um .plist de launchd tem poucos KB; acima de 1 MB não é um.
-                guard (values?.fileSize ?? 0) < 1_000_000,
+                guard values?.isRegularFile == true, (values?.fileSize ?? 0) < 1_000_000,
                       let data = try? Data(contentsOf: file) else { continue }
                 var agent = OptimizeLaunchPlist.parse(data, url: file, scope: source.scope, isMissing: isMissing)
                 agent.isRemovable = source.scope == .user && isSafeToRemove(file)
@@ -373,10 +379,14 @@ public enum OptimizeAgentScanner {
 
     /// Cruza com o launchd. Agentes de /Library/LaunchAgents também carregam na sessão do usuário.
     public static func apply(_ snapshot: OptimizeRuntimeSnapshot, to agents: [OptimizeLaunchAgent]) -> [OptimizeLaunchAgent] {
-        agents.map { agent in
+        let sharedLabels = Set(agents.filter { $0.scope == .systemAgent }.map(\.label))
+        return agents.map { agent in
             var agent = agent
             let isDaemon = agent.scope == .systemDaemon
-            let status = isDaemon ? snapshot.systemServices[agent.label] : snapshot.userServices[agent.label]
+            agent.sharesLabelWithSystemAgent = agent.scope == .user && sharedLabels.contains(agent.label)
+            // Rótulo repetido: quem fica carregado é o de /Library (vem antes); o estado é dele.
+            let status = isDaemon ? snapshot.systemServices[agent.label]
+                : agent.sharesLabelWithSystemAgent ? nil : snapshot.userServices[agent.label]
             agent.isLoaded = status != nil
             agent.pid = status?.pid
             agent.lastExitStatus = status?.lastExitStatus

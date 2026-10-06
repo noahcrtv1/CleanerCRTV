@@ -165,7 +165,7 @@ private struct OptimizeAgentsPane: View {
             if let owner = agent.owner {
                 Button("Mostrar \(owner.name) no Finder") { Reveal.inFinder(owner.url) }
             }
-            if agent.isManageable {
+            if agent.canToggle {
                 Divider()
                 Button(agent.isEnabled ? "Desativar" : "Ativar") { toggle(agent, !agent.isEnabled) }
             }
@@ -230,7 +230,7 @@ private struct OptimizeAgentsPane: View {
         let model = app.optimize
         let app = app
         Task {
-            let (items, stopped) = await model.prepareRemoval(targets)
+            let (items, stopped, stillRunning) = await model.prepareRemoval(targets)
             guard !items.isEmpty else { return }
             // Outro módulo abriu uma confirmação enquanto os agentes paravam: não passa por cima dela.
             guard app.removalRequest == nil else {
@@ -245,6 +245,11 @@ private struct OptimizeAgentsPane: View {
                 note += stopped == 1
                     ? " O agente já foi parado; se você cancelar, ele volta a ser carregado."
                     : " Os agentes já foram parados; se você cancelar, voltam a ser carregados."
+            }
+            if stillRunning > 0 {
+                note += stillRunning == 1
+                    ? " Um agente não parou agora: ele segue rodando até você sair da sessão."
+                    : " \(stillRunning) agentes não pararam agora: seguem rodando até você sair da sessão."
             }
             app.requestRemoval(items, source: Feature.optimize.title, title: title, note: note) { report in
                 model.finishRemoval(report)
@@ -338,7 +343,7 @@ private struct OptimizeAgentRow: View {
     @ViewBuilder private var control: some View {
         if isBusy {
             ProgressView().controlSize(.small)
-        } else if agent.isManageable {
+        } else if agent.canToggle {
             Toggle("Ativo", isOn: Binding(get: { agent.isEnabled }, set: { onToggle($0) }))
                 .toggleStyle(.switch)
                 .controlSize(.mini)
@@ -348,9 +353,17 @@ private struct OptimizeAgentRow: View {
         } else {
             Image(systemName: "lock.fill")
                 .foregroundStyle(.tertiary)
-                .help(agent.scope.isManageable ? "Arquivo inválido: não dá para ativar ou desativar" : "Requer administrador")
+                .help(lockHelp)
                 .accessibilityLabel("Somente leitura")
         }
+    }
+
+    private var lockHelp: String {
+        if !agent.scope.isManageable { return "Requer administrador" }
+        if agent.sharesLabelWithSystemAgent {
+            return "Tem o mesmo rótulo de um agente de /Library: ativar ou desativar mexeria nele também"
+        }
+        return "Arquivo inválido: não dá para ativar ou desativar"
     }
 
     @ViewBuilder private var icon: some View {

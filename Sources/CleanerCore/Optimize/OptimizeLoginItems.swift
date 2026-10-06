@@ -115,11 +115,14 @@ public enum OptimizeLoginItems {
     }
 
     static func items(names: [String], paths: [String?], hidden: [Bool]) -> [OptimizeLoginItem] {
-        names.enumerated().compactMap { index, name in
+        var seen: Set<OptimizeLoginItem.ID> = []
+        return names.enumerated().compactMap { index, name in
             let path = index < paths.count ? paths[index].flatMap { $0.isEmpty ? nil : $0 } : nil
             let label = name.isEmpty ? (path.map { URL(fileURLWithPath: $0).deletingPathExtension().lastPathComponent } ?? "") : name
             guard !label.isEmpty else { return nil }
-            return OptimizeLoginItem(name: label, path: path, isHidden: index < hidden.count ? hidden[index] : false)
+            let item = OptimizeLoginItem(name: label, path: path, isHidden: index < hidden.count ? hidden[index] : false)
+            // O mesmo app registrado duas vezes vira uma linha só (a remoção tira todas as cópias).
+            return seen.insert(item.id).inserted ? item : nil
         }
         .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }

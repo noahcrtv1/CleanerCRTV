@@ -202,8 +202,8 @@ struct OptimizeLaunchctlParserTests {
     }
 
     @Test func stopRefusesInvalidLabelWithoutRunningAnything() async {
-        #expect(await OptimizeLaunchctl.stopIfLoaded(from: fakeURL, label: "a/b") == false)
-        #expect(await OptimizeLaunchctl.stopIfLoaded(from: fakeURL, label: "") == false)
+        #expect(await OptimizeLaunchctl.stopIfLoaded(from: fakeURL, label: "a/b") == .notLoaded)
+        #expect(await OptimizeLaunchctl.stopIfLoaded(from: fakeURL, label: "") == .notLoaded)
     }
 
     @Test func commandsUseServiceTargets() {
@@ -305,6 +305,39 @@ struct OptimizeInventoryTests {
         #expect(result[0].isLoaded && result[0].pid == 42 && result[0].isEnabled)
         #expect(result[1].isLoaded && !result[1].isRunning)
         #expect(!result[2].isLoaded && result[2].isDisabled)
+        #expect(result[0].canToggle && !result[0].sharesLabelWithSystemAgent)
+    }
+
+    @Test func userAgentWithSystemLabelCannotBeToggled() async {
+        let user = OptimizeLaunchAgent(url: fakeURL, scope: .user, label: "com.s", program: "/bin/sh")
+        let system = OptimizeLaunchAgent(url: URL(fileURLWithPath: "/Library/LaunchAgents/com.s.plist"), scope: .systemAgent,
+                                         label: "com.s", program: "/bin/sh")
+        let snapshot = OptimizeRuntimeSnapshot(userServices: ["com.s": OptimizeServiceStatus(pid: 7)])
+        let result = OptimizeAgentScanner.apply(snapshot, to: [user, system])
+        #expect(result[0].sharesLabelWithSystemAgent)
+        #expect(result[0].isManageable && !result[0].canToggle)
+        #expect(!result[0].isLoaded, "o carregado é o de /Library")
+        #expect(result[1].isRunning && !result[1].sharesLabelWithSystemAgent)
+        // Recusa antes de rodar o launchctl: desativar o rótulo derrubaria o agente de /Library.
+        #expect(await OptimizeLaunchctl.disable(result[0]) == .refused)
+        #expect(await OptimizeLaunchctl.enable(result[0]) == .refused)
+    }
+
+    @Test func skipsNonRegularFiles() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("optimize-fifo-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let fifo = dir.appendingPathComponent("com.exemplo.fifo.plist")
+        #expect(mkfifo(fifo.path, 0o600) == 0)
+        try FileManager.default.createDirectory(at: dir.appendingPathComponent("pasta.plist"), withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: dir.appendingPathComponent("link-fifo.plist"), withDestinationURL: fifo)
+        let real = dir.appendingPathComponent("com.exemplo.ok.plist")
+        try plistData(["Label": "com.exemplo.ok", "Program": "/bin/sh"]).write(to: real)
+        try FileManager.default.createSymbolicLink(at: dir.appendingPathComponent("link-ok.plist"), withDestinationURL: real)
+
+        let agents = OptimizeAgentScanner.readAgents(in: [OptimizeAgentSource(directory: dir, scope: .user)],
+                                                     isExcluded: { _ in false }, isSafeToRemove: { _ in true })
+        #expect(agents.map(\.url.lastPathComponent).sorted() == ["com.exemplo.ok.plist", "link-ok.plist"])
     }
 
     @Test func ownerGuesses() {
@@ -499,6 +532,13 @@ struct OptimizeLoginItemsTests {
         #expect(items[0].path == nil && items[0].url == nil)
         #expect(items[1].isHidden)
         #expect(items[2].url?.path == "/Applications/zoom.us.app")
+    }
+
+    @Test func duplicatesBecomeOneRow() {
+        let items = OptimizeLoginItems.items(names: ["Zoom", "Zoom"],
+                                             paths: ["/Applications/zoom.us.app", "/Applications/zoom.us.app"],
+                                             hidden: [false, false])
+        #expect(items.count == 1)
     }
 
     @Test func readsAppleEventColumns() {

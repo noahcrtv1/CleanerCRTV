@@ -140,7 +140,7 @@ final class OptimizeModel: ScanningFeature {
 
     /// Ativa ou desativa um agente do usuário. Devolve a mensagem de erro, se houver.
     func setEnabled(_ agent: OptimizeLaunchAgent, _ enabled: Bool) async -> String? {
-        guard agent.isManageable, !busyAgents.contains(agent.id) else { return nil }
+        guard agent.canToggle, !busyAgents.contains(agent.id) else { return nil }
         busyAgents.insert(agent.id)
         // Otimista: o interruptor responde na hora; o launchd confirma logo depois.
         update(agent.id) { $0.disabledOverride = !enabled }
@@ -152,27 +152,35 @@ final class OptimizeModel: ScanningFeature {
 
     /// Para os agentes no launchd e devolve os itens para a confirmação de remoção.
     /// Se a confirmação for cancelada, `removalSheetClosed()` volta a carregá-los.
-    func prepareRemoval(_ targets: [OptimizeLaunchAgent]) async -> (items: [RemovalItem], stopped: Int) {
-        let removable = targets.filter { $0.scope == .user && $0.isRemovable }
+    /// `stillRunning`: estavam carregados e não pararam (seguem rodando até a próxima sessão).
+    func prepareRemoval(_ targets: [OptimizeLaunchAgent]) async -> (items: [RemovalItem], stopped: Int, stillRunning: Int) {
+        // Quem está sendo ativado ou desativado agora fica de fora: o bootout cruzaria com o bootstrap.
+        let removable = targets.filter { $0.scope == .user && $0.isRemovable && !busyAgents.contains($0.id) }
         // Um pedido por vez: um segundo clique durante o bootout perderia a lista dos parados.
-        guard !removable.isEmpty, pendingRemoval == nil, !isPreparingRemoval else { return ([], 0) }
+        guard !removable.isEmpty, pendingRemoval == nil, !isPreparingRemoval else { return ([], 0, 0) }
         isPreparingRemoval = true
         defer { isPreparingRemoval = false }
         busyAgents.formUnion(removable.map(\.id))
-        let (items, stopped) = await Task.detached(priority: .userInitiated) { () -> ([RemovalItem], [OptimizeLaunchAgent]) in
+        let (items, stopped, stillRunning) = await Task.detached(priority: .userInitiated) {
+            () -> ([RemovalItem], [OptimizeLaunchAgent], Int) in
             var stopped: [OptimizeLaunchAgent] = []
+            var stillRunning = 0
             // Confere no launchd agora (o estado da varredura pode estar velho); só conta quem parou de fato.
             for agent in removable where OptimizeLaunchctl.isValidLabel(agent.label) {
-                if await OptimizeLaunchctl.stopIfLoaded(from: agent.url, label: agent.label) { stopped.append(agent) }
+                switch await OptimizeLaunchctl.stopIfLoaded(from: agent.url, label: agent.label) {
+                case .stopped: stopped.append(agent)
+                case .failed: stillRunning += 1
+                case .notLoaded: break
+                }
             }
             let items = removable.map {
                 RemovalItem(url: $0.url, size: FileSizer.allocatedSize(ofItem: $0.url), label: $0.displayName)
             }
-            return (items, stopped)
+            return (items, stopped, stillRunning)
         }.value
         busyAgents.subtract(removable.map(\.id))
         pendingRemoval = stopped
-        return (items, stopped.count)
+        return (items, stopped.count, stillRunning)
     }
 
     /// Conclusão da remoção: tira da lista o que saiu e recarrega o que ficou para trás.
@@ -182,20 +190,20 @@ final class OptimizeModel: ScanningFeature {
         pendingRemoval = nil
         agents.removeAll { removed.contains($0.url) }
         let leftBehind = stopped.filter { !removed.contains($0.url) }
-        if !leftBehind.isEmpty {
-            Task { await restore(leftBehind) }
-        }
+        // Relê mesmo sem nada para recarregar: uma releitura que começou antes da remoção traria
+        // de volta linhas de arquivos que já saíram.
+        Task { await restore(leftBehind) }
     }
 
     /// A folha de confirmação fechou (ou nem chegou a abrir). Sem conclusão = cancelada: os agentes parados voltam.
     func removalSheetClosed() async {
         guard let stopped = pendingRemoval else { return }
         pendingRemoval = nil
+        guard !stopped.isEmpty else { return }
         await restore(stopped)
     }
 
     private func restore(_ stopped: [OptimizeLaunchAgent]) async {
-        guard !stopped.isEmpty else { return }
         for agent in stopped { await OptimizeLaunchctl.reload(agent) }
         await loadAgents(showProgress: false)
     }

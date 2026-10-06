@@ -117,7 +117,7 @@ public enum OptimizeLaunchctl {
 
     /// Desativa um agente do usuário.
     public static func disable(_ agent: OptimizeLaunchAgent) async -> OptimizeActionResult {
-        guard let label = manageableLabel(agent) else { return .refused }
+        guard agent.canToggle, let label = manageableLabel(agent) else { return .refused }
         let commands = disableCommands(label: label)
         // bootout espera o processo sair (ExitTimeOut padrão do launchd: 20 s).
         let bootout = await OptimizeProcess.run(executable, commands[0], timeout: 30)
@@ -128,7 +128,7 @@ public enum OptimizeLaunchctl {
 
     /// Ativa e carrega um agente do usuário.
     public static func enable(_ agent: OptimizeLaunchAgent) async -> OptimizeActionResult {
-        guard let label = manageableLabel(agent) else { return .refused }
+        guard agent.canToggle, let label = manageableLabel(agent) else { return .refused }
         let commands = enableCommands(label: label, plist: agent.url)
         let enable = await OptimizeProcess.run(executable, commands[0])
         guard enable.succeeded else { return .failed(enable.errorLine) }
@@ -154,17 +154,17 @@ public enum OptimizeLaunchctl {
     }
 
     /// Para o serviço só se o launchd o carregou a partir deste .plist: um agente de /Library
-    /// pode ter o mesmo rótulo e não deve cair junto. true = estava carregado e parou (é o que
-    /// precisa voltar a carregar se a remoção for cancelada); false = não estava, era de outro
-    /// arquivo ou o bootout falhou.
-    public static func stopIfLoaded(from plist: URL, label: String) async -> Bool {
-        guard isValidLabel(label) else { return false }
+    /// pode ter o mesmo rótulo e não deve cair junto. `.stopped` é o que precisa voltar a carregar
+    /// se a remoção for cancelada.
+    public static func stopIfLoaded(from plist: URL, label: String) async -> OptimizeStopResult {
+        guard isValidLabel(label) else { return .notLoaded }
         let info = await OptimizeProcess.run(executable, ["print", serviceTarget(label)])
         guard info.succeeded,
               isSamePlist(loadedFrom: OptimizeLaunchctlParser.parseServicePath(info.stdout), plist: plist)
-        else { return false }
+        else { return .notLoaded }
         let result = await OptimizeProcess.run(executable, ["bootout", serviceTarget(label)], timeout: 30)
-        return result.succeeded
+        if result.succeeded { return .stopped }
+        return isNotLoadedStatus(result) ? .notLoaded : .failed(result.errorLine)
     }
 
     /// Sem linha `path` não dá para saber de onde veio: vale como o mesmo arquivo (comportamento do bootout puro).
@@ -193,6 +193,14 @@ public enum OptimizeLaunchctl {
         guard agent.scope == .user, agent.problem != .invalidPlist, isValidLabel(agent.label) else { return nil }
         return agent.label
     }
+}
+
+public enum OptimizeStopResult: Sendable, Equatable {
+    /// Não estava carregado, ou estava carregado a partir de outro arquivo.
+    case notLoaded
+    case stopped
+    /// Estava carregado deste arquivo e não parou: segue rodando até a próxima sessão.
+    case failed(String)
 }
 
 public enum OptimizeActionResult: Sendable, Equatable {
