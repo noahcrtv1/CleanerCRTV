@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tutorial CleanerCRTV</title>
+<style>
+:root { --bg:#fbfaff; --fg:#1b1730; --muted:#5d5875; --card:#fff; --line:#e6e2f2; --accent:#7a3be0; }
+@media (prefers-color-scheme: dark) { :root { --bg:#100e1a; --fg:#ece9f7; --muted:#a39fbb; --card:#1a1727; --line:#2b2740; --accent:#b48cff; } }
+* { box-sizing:border-box }
+body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.6 -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif; }
+main { max-width:860px; margin:0 auto; padding:48px 20px 80px; }
+h1 { font-size:40px; line-height:1.1; margin:0 0 8px; background:linear-gradient(120deg,#ff3b40,#dc2e8c 38%,#7338d9 68%,#1abfd9); -webkit-background-clip:text; color:transparent; }
+h2 { margin:56px 0 8px; font-size:26px; }
+h3 { margin:28px 0 4px; font-size:18px; }
+p, li { color:var(--fg); } .muted { color:var(--muted); }
+img { width:100%; border-radius:12px; border:1px solid var(--line); margin:14px 0; }
+.box { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:16px 20px; margin:18px 0; }
+.warn { border-left:4px solid #ff9a1f; }
+kbd { font:13px ui-monospace, monospace; padding:1px 6px; border:1px solid var(--line); border-radius:5px; background:var(--card); }
+nav a { color:var(--accent); text-decoration:none; } nav li { margin:2px 0; }
+</style>
+</head>
+<body><main>
+<h1>CleanerCRTV</h1>
+<p class="muted">Limpeza, arquivos grandes, duplicados, mapa do disco, desinstalador, otimização e monitor — num app só.</p>
+
+<nav class="box"><strong>Índice</strong><ol>
+<li><a href="#instalar">Instalar</a></li><li><a href="#acesso">Acesso Total ao Disco</a></li>
+<li><a href="#seguranca">Como o app protege seus arquivos</a></li><li><a href="#painel">Painel</a></li>
+<li><a href="#lixo">Lixo do sistema</a></li><li><a href="#grandes">Grandes e antigos</a></li>
+<li><a href="#dup">Duplicados</a></li><li><a href="#mapa">Mapa do disco</a></li>
+<li><a href="#desinst">Desinstalador</a></li><li><a href="#otim">Otimização</a></li>
+<li><a href="#monitor">Monitor e barra de menus</a></li><li><a href="#hist">Histórico</a></li>
+<li><a href="#atalhos">Atalhos e dicas</a></li></ol></nav>
+
+<h2 id="instalar">1. Instalar</h2>
+<ol>
+<li>Abra o arquivo <strong>CleanerCRTV.dmg</strong> e arraste o <strong>CleanerCRTV</strong> para <strong>Aplicativos</strong>.</li>
+<li>Abra o app. Na primeira vez o macOS avisa que ele não é de um desenvolvedor identificado.</li>
+<li>Vá em <strong>Ajustes do Sistema ▸ Privacidade e Segurança</strong>, role até o fim e clique em <strong>Abrir Mesmo Assim</strong>.</li>
+</ol>
+<p class="muted">Requer macOS 26 ou mais novo.</p>
+
+<h2 id="acesso">2. Acesso Total ao Disco</h2>
+<p>Sem essa permissão, caches de outros apps, Safari, Mail e a Lixeira ficam invisíveis. O app mostra uma faixa laranja no topo enquanto ela não for dada.</p>
+<ol>
+<li>Clique em <strong>Abrir Ajustes</strong> na faixa laranja.</li>
+<li>Ative o <strong>CleanerCRTV</strong> na lista <strong>Acesso Total ao Disco</strong> (se não aparecer, clique em <strong>+</strong> e escolha o app em Aplicativos).</li>
+<li>Volte ao app. A faixa some sozinha.</li>
+</ol>
+<div class="box warn">Ao instalar uma versão nova, o macOS pode pedir para conceder de novo: desligue e ligue a chave do CleanerCRTV.</div>
+
+<h2 id="seguranca">3. Como o app protege seus arquivos</h2>
+<ul>
+<li><strong>Nada é apagado sem confirmação.</strong> Toda remoção abre uma janela mostrando o que vai sair e quanto ocupa.</li>
+<li><strong>Por padrão tudo vai para a Lixeira</strong> — dá para recuperar. Apagar de vez exige marcar “Entendo que não dá para desfazer”.</li>
+<li>O app <strong>nunca mexe no sistema</strong> (/System, /usr, Chaves, Fotos do sistema etc.). Só trabalha na sua pasta pessoal, em /Applications e em discos externos.</li>
+<li>Clique com o botão direito em qualquer item ▸ <strong>Ignorar sempre</strong> para ele nunca mais aparecer. A lista de ignorados fica em <strong>Ajustes</strong> (<kbd>⌘ ,</kbd>).</li>
+<li>Tudo removido fica registrado em <a href="#hist">Histórico</a>.</li>
+</ul>
+
+<h2 id="painel">4. Painel</h2>
+<img src="img/dashboard.png" alt="Painel">
+<p>Clique em <strong>Escanear</strong>: o app roda Lixo do sistema, Grandes e antigos, Desinstalador e Otimização ao mesmo tempo e mostra um cartão para cada.</p>
+<ul>
+<li><strong>Limpar</strong> no cartão de Lixo remove só o que é recomendado (o mesmo que está marcado na tela do módulo).</li>
+<li><strong>Revisar</strong> abre o módulo para você escolher item a item.</li>
+<li><strong>Lixeira ▸ Esvaziar</strong> apaga de vez o que já está na Lixeira.</li>
+<li>Duplicados não roda no escaneamento rápido porque compara arquivos byte a byte e demora mais.</li>
+</ul>
+
+<h2 id="lixo">5. Lixo do sistema</h2>
+<img src="img/cleanup.png" alt="Lixo do sistema">
+<p>Caches de apps e navegadores, registros antigos, restos de desenvolvimento (Xcode, npm…), anexos do Mail, instaladores esquecidos em Downloads e backups antigos de iPhone.</p>
+<ol>
+<li>Clique em <strong>Escanear</strong>.</li>
+<li>À esquerda ficam as categorias; clique numa para ver os itens à direita.</li>
+<li>Marque ou desmarque. Itens com a etiqueta <strong>App aberto</strong> ou <strong>Em uso</strong> começam desmarcados — feche o app antes de limpá-los.</li>
+<li>Clique em <strong>Limpar</strong> no rodapé e confirme.</li>
+</ol>
+<p class="muted">Navegadores: só cache sai. Senhas, histórico, cookies e favoritos nunca entram.</p>
+
+<h2 id="grandes">6. Grandes e antigos</h2>
+<img src="img/largeOld.png" alt="Grandes e antigos">
+<p>Arquivos pesados que você não abre há tempo.</p>
+<ul>
+<li><strong>Tamanho mínimo</strong> e <strong>Sem abrir há</strong> filtram a lista.</li>
+<li>As pílulas (Vídeos, Áudio, Imagens…) filtram por tipo.</li>
+<li>Clique nas colunas para ordenar; <kbd>espaço</kbd> abre o Quick Look.</li>
+<li>Marque os arquivos e clique em <strong>Remover…</strong>.</li>
+<li>No menu de cima à direita escolha outra pasta ou um disco externo.</li>
+</ul>
+
+<h2 id="dup">7. Duplicados</h2>
+<p>Encontra cópias idênticas (conteúdo igual byte a byte, não só o nome).</p>
+<ol>
+<li>Escolha as pastas e clique em <strong>Procurar duplicados</strong>.</li>
+<li>Cada grupo mostra as cópias. O app já mantém uma (a mais antiga ou a que está no lugar mais “oficial”) e marca as outras.</li>
+<li>Confira as miniaturas, ajuste se quiser e clique em <strong>Remover</strong>. Ao menos uma cópia de cada grupo sempre fica.</li>
+</ol>
+
+<h2 id="mapa">8. Mapa do disco</h2>
+<img src="img/diskMap.png" alt="Mapa do disco">
+<p>Mostra onde está o espaço, no estilo OmniDiskSweeper / DaisyDisk.</p>
+<ul>
+<li><strong>Raios de sol</strong>: cada anel é um nível de pasta. Clique num pedaço para entrar; clique no centro para voltar.</li>
+<li><strong>Colunas</strong>: navegação como no Finder, com tamanhos.</li>
+<li>Escolha a pasta ou disco no menu do topo; <strong>Atualizar</strong> lê de novo.</li>
+<li>Botão direito ▸ <strong>Mover para a remoção</strong> junta itens na bandeja “Para remover”; depois clique em <strong>Remover</strong>.</li>
+</ul>
+
+<h2 id="desinst">9. Desinstalador</h2>
+<p>Remove apps <em>e</em> o que eles espalham (preferências, caches, suportes, agentes).</p>
+<ol>
+<li>Escolha o app na lista (busque pelo nome; dá para ordenar por tamanho ou último uso).</li>
+<li>À direita aparecem o app e os restos encontrados. Desmarque o que quiser manter.</li>
+<li>Clique em <strong>Desinstalar…</strong>. Se o app estiver aberto, o CleanerCRTV oferece encerrá-lo.</li>
+</ol>
+<p><strong>Restos</strong> (aba no topo): sobras de apps que você já apagou antes.</p>
+<p class="muted">Apps da Apple que vêm com o macOS não podem ser removidos.</p>
+
+<h2 id="otim">10. Otimização</h2>
+<img src="img/optimize.png" alt="Otimização">
+<ul>
+<li><strong>Agentes de inicialização</strong>: programas que rodam em segundo plano. A chave liga/desliga; <strong>Remover quebrados</strong> limpa os que apontam para apps que não existem mais. Os do sistema (cadeado) só podem ser vistos.</li>
+<li><strong>Itens de início</strong>: o que abre ao entrar na conta. Atalho para ajustar em Ajustes do Sistema.</li>
+<li><strong>Manutenção</strong>: liberar memória, limpar cache de DNS, reindexar o Spotlight etc. Tarefas que exigem administrador pedem sua senha do Mac na hora.</li>
+</ul>
+
+<h2 id="monitor">11. Monitor e barra de menus</h2>
+<img src="img/monitor.png" alt="Monitor">
+<p>Processador, memória, disco, rede, bateria e temperatura em tempo real, mais a lista de processos.</p>
+<ul>
+<li>Selecione um processo e clique em <strong>Encerrar</strong> (ou <strong>Forçar encerramento</strong> se ele travou).</li>
+<li>O ícone na <strong>barra de menus</strong> mostra um resumo; clique nele para o painel completo. Desative em Ajustes se não quiser.</li>
+<li>Com o ícone ativo, fechar a janela não encerra o app. Para sair de vez: <kbd>⌘ Q</kbd>.</li>
+</ul>
+
+<h2 id="hist">12. Histórico</h2>
+<img src="img/history.png" alt="Histórico">
+<p>Tudo o que o app removeu, de onde, quanto e se foi para a Lixeira ou apagado de vez. Clique na seta para ver os caminhos. Itens enviados à Lixeira podem ser recuperados no Finder (Lixeira ▸ botão direito ▸ Pôr de Volta).</p>
+
+<h2 id="atalhos">13. Atalhos e dicas</h2>
+<ul>
+<li><kbd>⌘ 1</kbd> … <kbd>⌘ 9</kbd>: pula direto para cada tela (na ordem da barra lateral).</li>
+<li><kbd>⌘ ,</kbd>: Ajustes (modo padrão de remoção, ignorados, barra de menus, animação de abertura).</li>
+<li><kbd>espaço</kbd>: marca/desmarca ou Quick Look na lista selecionada; clique duplo mostra no Finder.</li>
+<li>Rode o Painel uma vez por semana; os caches voltam a crescer naturalmente.</li>
+</ul>
+</main></body></html>

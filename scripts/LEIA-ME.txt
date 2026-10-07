@@ -16,3 +16,6 @@ SEGURANÇA
 - Tudo o que foi removido fica registrado em Histórico.
 
 Requer macOS 26 ou mais novo, Apple Silicon ou Intel.
+
+TUTORIAL
+Abra Tutorial/Tutorial.html (no navegador) para o passo a passo de cada tela.

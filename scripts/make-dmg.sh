@@ -17,6 +17,9 @@ mkdir -p "$STAGE"
 ditto "$APP" "$STAGE/CleanerCRTV.app"
 ln -s /Applications "$STAGE/Aplicativos"
 cp scripts/LEIA-ME.txt "$STAGE/LEIA-ME.txt"
+mkdir -p "$STAGE/Tutorial"
+cp docs/Tutorial.html "$STAGE/Tutorial/Tutorial.html"
+ditto docs/img "$STAGE/Tutorial/img"
 
 hdiutil create -volname "CleanerCRTV" -srcfolder "$STAGE" -fs HFS+ -format ULFO -ov "$DMG" >/dev/null
 rm -rf "$STAGE"
