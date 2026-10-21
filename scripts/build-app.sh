@@ -20,6 +20,7 @@ swift build -c release
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp .build/release/CleanerCRTV "$APP/Contents/MacOS/CleanerCRTV"
+strip -S "$APP/Contents/MacOS/CleanerCRTV"  # tira caminhos de debug do binário
 
 # Ícone Liquid Glass do Icon Composer
 if xcrun --find actool >/dev/null 2>&1 && [[ -d Resources/AppIcon.icon ]]; then
